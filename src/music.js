@@ -3,23 +3,24 @@ import { initStrudel } from '@strudel/web';
 // ---------------------------------------------------------------------------
 // MusicDirector — one Strudel stack, started once, never re-evaluated.
 //
-// The game writes a snapshot every frame; the director eases five mood
+// The game writes a snapshot every frame; the director eases six mood
 // variables toward targets derived from it. Every layer's gain (and some
 // filters) is a Strudel signal() reading those variables, so the soundtrack
-// follows the battle continuously (same architecture as the adaptive-strudel
-// POC, but with a full mood cycle):
+// follows the journey continuously:
 //
-//   calm ──(enemies spawn)──▶ combat ──(intensity: enemy count + squad hp)
-//     ▲                          │
-//     │                          ▼ (enemies almost gone)
-//   (victory fades out) ◀── victory ◀── hopeful
+//   home    — inside the village: warm, safe
+//   dread   — how deep into dangerous ground you are (even with no enemies,
+//             the east feels uneasy)
+//   combat  — enemies engaged nearby
+//   intensity — how bad the fight is (enemy count + squad wounds)
+//   hope    — the skirmish is almost won
+//   victory — fanfare when the last nearby enemy falls, decaying into calm
 //
-// Everything is diatonic to C major / A minor so any crossfade between moods
-// stays musical.
+// Everything is diatonic to C major / A minor so any crossfade stays musical.
 // ---------------------------------------------------------------------------
 class MusicDirector {
   constructor() {
-    this.mood = { combat: 0, intensity: 0, hope: 0, victory: 0 };
+    this.mood = { home: 1, dread: 0, combat: 0, intensity: 0, hope: 0, victory: 0 };
     this.victoryHold = 0;
     this.defeated = false;
     this.started = false;
@@ -45,9 +46,9 @@ class MusicDirector {
 
   setDefeated(v) { this.defeated = v; }
 
-  onWaveCleared() {
+  onCombatWon() {
     if (this.defeated) return;
-    this.victoryHold = 6; // seconds of fanfare before drifting back to calm
+    this.victoryHold = 5; // seconds of fanfare before drifting back to calm
   }
 
   // Linear ease toward a target at a per-second rate — slow rates make the
@@ -63,16 +64,18 @@ class MusicDirector {
     this.victoryHold = Math.max(0, this.victoryHold - dt);
     const inCombat = snap.enemies > 0 && !this.defeated;
 
-    this.ease('combat', inCombat ? 1 : 0, inCombat ? .4 : .15, dt);
+    this.ease('home', snap.home ? 1 : 0, .4, dt);
+    this.ease('dread', snap.danger, .25, dt);
+    this.ease('combat', inCombat ? 1 : 0, inCombat ? .45 : .15, dt);
 
-    const enemyFactor = Math.min(1, snap.enemies / Math.max(4, snap.waveMax || 4));
+    const enemyFactor = Math.min(1, snap.enemies / 6);
     const hurtFactor = 1 - snap.avgHealth;
     const intensityTarget = inCombat
-      ? Math.min(1, .25 + .55 * enemyFactor + .6 * hurtFactor) : 0;
+      ? Math.min(1, .2 + .5 * enemyFactor + .45 * snap.danger + .5 * hurtFactor) : 0;
     this.ease('intensity', intensityTarget, .3, dt);
 
-    const hopeful = inCombat && snap.spawningDone && snap.enemies <= 2;
-    this.ease('hope', hopeful ? 1 : 0, hopeful ? .5 : .35, dt);
+    const hopeful = inCombat && snap.enemies <= 1 && this.mood.combat > .5;
+    this.ease('hope', hopeful ? 1 : 0, hopeful ? .6 : .35, dt);
 
     const victoryTarget = this.victoryHold > 0 && !this.defeated ? 1 : 0;
     this.ease('victory', victoryTarget, victoryTarget ? 1.2 : .12, dt);
@@ -86,47 +89,54 @@ class MusicDirector {
     const calm = () => (1 - m.combat) * (1 - m.victory);
 
     return stack(
-      // ---- CALM: wandering, no danger --------------------------------------
+      // ---- CALM: wandering ---------------------------------------------------
       // slow warm chords (Am F C G), one every two cycles
       note('<[a2,c3,e3] [f2,a2,c3] [c3,e3,g3] [g2,b2,d3]>/2')
         .sound('triangle').attack(.6).release(1.2).room(.6)
-        .lpf(sig(() => 900 + m.hope * 900))
+        .lpf(sig(() => 900 + m.hope * 900 - m.dread * 350))
         .gain(sig(() => calm() * .42)),
-      // gentle melody over it
+      // gentle melody over it — thins out as dread creeps in
       note('a3 ~ [c4 e4] ~ g4 ~ e4 ~').slow(2)
         .sound('triangle').room(.5).delay(.25)
-        .gain(sig(() => calm() * .3)),
+        .gain(sig(() => calm() * (1 - m.dread * .6) * .3)),
       // soft tick
       sound('hh*4').gain(sig(() => calm() * .1)),
 
-      // ---- COMBAT: the war machine -----------------------------------------
-      // marching kick
+      // ---- HOME: the village hearth ------------------------------------------
+      // music-box line that only lives near the campfire
+      note('e5 c5 g4 c5 e5 g5 e5 c5').slow(2)
+        .sound('triangle').room(.7).delay(.3)
+        .gain(sig(() => calm() * m.home * .22)),
+
+      // ---- DREAD: deep ground, no fight yet ----------------------------------
+      // low pulse that grows the further east you walk
+      note('a1 ~ ~ ~').sound('sawtooth').lpf(320).attack(.05).release(.6)
+        .gain(sig(() => m.dread * (1 - m.combat) * .3)),
+      note('[a2 ~ ab2 ~]/2').sound('sawtooth').lpf(500).room(.4)
+        .gain(sig(() => m.dread * (1 - m.combat) * .14)),
+
+      // ---- COMBAT: the war machine -------------------------------------------
       sound('bd ~ ~ bd ~ ~ bd ~').gain(sig(() => m.combat * .85)),
-      // military snare pattern
       sound('~ sd ~ [sd sd]').gain(sig(() => m.combat * .55)),
-      // snare roll — only surfaces when the fight gets desperate
+      // snare roll — surfaces when the fight gets desperate
       sound('sd*16').gain(sig(() => m.combat * m.intensity * m.intensity * .3)),
-      // driving second kick at high intensity
       sound('bd*4').gain(sig(() => m.combat * m.intensity * .5)),
-      // bass ostinato, opens up with intensity
       note('[a1 a1 e1 g1]*2').sound('sawtooth')
         .lpf(sig(() => 350 + m.intensity * 1300))
         .gain(sig(() => m.combat * .5)),
-      // tense inner line — yields to the hopeful lead as the tide turns
       note('[a3 b3 c4 b3]*2').sound('sawtooth').lpf(2000)
         .gain(sig(() => m.combat * (1 - m.hope) * .28)),
-      // chord stabs + drive hats at high intensity
       note('~ [a3,c4,e4] ~ [a3,c4,e4]').sound('sawtooth').lpf(1800)
         .gain(sig(() => m.combat * m.intensity * .25)),
       sound('hh*8').gain(sig(() => m.combat * m.intensity * .3)),
 
-      // ---- HOPEFUL: the enemy is almost broken ------------------------------
+      // ---- HOPEFUL: the skirmish is almost won --------------------------------
       note('[c4 e4 g4 c5]*2').sound('triangle').delay(.3).room(.4)
         .gain(sig(() => m.hope * .35)),
       note('<[e4 g4] [c5 b4] [a4 g4] [e4 ~]>').sound('triangle').room(.5)
         .gain(sig(() => m.hope * .3)),
 
-      // ---- VICTORY: fanfare, then it decays into calm -----------------------
+      // ---- VICTORY: fanfare, then it decays into calm --------------------------
       note('<[c4 c4 c4 e4] [g4 g4 ~ e4] [g4 ~ c5 ~] [c5 ~ ~ ~]>')
         .sound('sawtooth').lpf(2500).delay(.25).room(.4)
         .gain(sig(() => m.victory * .5)),

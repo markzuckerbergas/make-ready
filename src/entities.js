@@ -1,4 +1,4 @@
-import { PLAY, dscale, clamp, dist } from './world.js';
+import { PLAY, SAFE_EDGE, dangerAt, dscale, clamp, dist } from './world.js';
 
 // ---------------------------------------------------------------------------
 // Base unit: position in world coords, hp, facing, sprite + shadow that get
@@ -12,7 +12,7 @@ export class Unit {
     this.speed = opts.speed ?? 150;
     this.alive = true;
     this.removed = false;
-    this.facing = 1; // 1 = right, -1 = left
+    this.facing = 1; // sprite flip: 1 = right, -1 = left
     this.flashT = 0;
     this.shadow = scene.add.image(x, y, 'shadow').setAlpha(.3);
     this.sprite = scene.add.image(x, y, texture);
@@ -46,6 +46,13 @@ export class Unit {
     this.shadow.setAlpha(.12);
   }
 
+  revive(hp) {
+    this.alive = true;
+    this.hp = hp;
+    this.sprite.setAngle(0).setAlpha(1).clearTint();
+    this.shadow.setAlpha(.3);
+  }
+
   destroy() {
     this.sprite.destroy();
     this.shadow.destroy();
@@ -68,16 +75,21 @@ export class Unit {
 }
 
 // ---------------------------------------------------------------------------
-// Player: free movement, sword (SPACE) and a Martini-Henry rifle —
-// single shot (click), manual reload (R).
+// Player: free movement, EXPLICIT weapon switching (X/TAB, with a stow/draw
+// animation): the Martini-Henry (click to fire, R to reload) or the sword
+// (click/SPACE swings toward the direction the character is FACING).
+// Facing is an 8-way vector taken from the last movement input.
 // ---------------------------------------------------------------------------
 export class Player extends Unit {
   constructor(scene, x, y) {
-    super(scene, x, y, 'soldier_blue', { hp: 120, speed: 175 });
+    super(scene, x, y, 'soldier_blue_rifle', { hp: 120, speed: 175 });
+    this.weapon = 'rifle';    // 'rifle' | 'sword'
+    this.switchT = 0;         // >0 while stowing/drawing
     this.loaded = true;
-    this.reloadT = 0;   // >0 while reloading
+    this.reloadT = 0;
     this.reloadTime = 2.2;
     this.swordCd = 0;
+    this.faceX = 1; this.faceY = 0; // facing vector (last movement direction)
   }
 
   update(dt, input) {
@@ -92,6 +104,7 @@ export class Player extends Unit {
       const s = this.speed * dscale(this.y) * dt;
       this.x += (dx / n) * s;
       this.y += (dy / n) * s;
+      this.faceX = dx / n; this.faceY = dy / n;
       if (dx) this.facing = dx > 0 ? 1 : -1;
       this.clampToField();
     }
@@ -99,35 +112,63 @@ export class Player extends Unit {
       this.reloadT -= dt;
       if (this.reloadT <= 0) { this.loaded = true; this.scene.toast('rifle loaded'); }
     }
+    if (this.switchT > 0) this.switchT -= dt;
     this.swordCd = Math.max(0, this.swordCd - dt);
     this.updateVisual(dt);
   }
 
-  fire(angle) {
-    if (!this.alive) return;
-    if (!this.loaded) { this.scene.toast(this.reloadT > 0 ? 'reloading…' : 'click! — R to reload'); return; }
-    this.loaded = false;
-    this.scene.shoot(this, angle, 2.5, 55);
+  faceAngle() { return Math.atan2(this.faceY, this.faceX); }
+
+  // X / TAB: stow one weapon, draw the other. Takes a moment — mid-switch
+  // you can't attack, and the sprite swaps halfway through.
+  switchWeapon() {
+    if (!this.alive || this.switchT > 0) return;
+    this.switchT = .5;
+    const next = this.weapon === 'rifle' ? 'sword' : 'rifle';
+    this.scene.toast(next === 'sword' ? 'stowing rifle… sword out!' : 'sheathing sword… rifle up!');
+    this.scene.tweens.add({ targets: this.sprite, angle: { from: -12, to: 0 }, duration: 480, ease: 'Back.easeOut' });
+    this.scene.time.delayedCall(250, () => {
+      this.weapon = next;
+      this.sprite.setTexture(next === 'sword' ? 'soldier_blue_sword' : 'soldier_blue_rifle');
+    });
+  }
+
+  attack(pointerAngle) {
+    if (!this.alive || this.switchT > 0) return;
+    if (this.weapon === 'rifle') {
+      if (!this.loaded) { this.scene.toast(this.reloadT > 0 ? 'reloading…' : 'click! — R to reload'); return; }
+      this.loaded = false;
+      this.scene.shoot(this, pointerAngle, 2.5, 55);
+    } else {
+      this.swing();
+    }
+  }
+
+  swing() {
+    if (!this.alive || this.switchT > 0 || this.weapon !== 'sword') {
+      if (this.weapon !== 'sword') this.scene.toast('draw your sword first (X)');
+      return;
+    }
+    if (this.swordCd > 0) return;
+    this.swordCd = .45;
+    this.scene.melee(this, this.faceAngle(), 48, 32); // swings where you FACE
   }
 
   reload() {
-    if (this.alive && !this.loaded && this.reloadT <= 0) {
+    if (!this.alive || this.switchT > 0) return;
+    if (this.weapon !== 'rifle') { this.scene.toast('rifle is on your back (X)'); return; }
+    if (!this.loaded && this.reloadT <= 0) {
       this.reloadT = this.reloadTime;
       this.scene.toast('reloading…');
     }
   }
-
-  sword(angle) {
-    if (!this.alive || this.swordCd > 0) return;
-    this.swordCd = .45;
-    this.scene.melee(this, angle, 48, 32);
-  }
 }
 
 // ---------------------------------------------------------------------------
-// Ally: obeys formation + fire commands.
-//   modes: 'line' (flank the player), 'behind' (line up behind the player),
-//          'free' (fire at will), 'charge' (swords out, run at the enemy).
+// Ally: obeys formation + fire commands. Formations are RELATIVE TO THE
+// PLAYER'S FACING: "line" extends perpendicular to it (a firing line facing
+// the same way), "behind" is opposite to it.
+//   modes: 'line' | 'behind' | 'free' (fire at will) | 'charge'
 //   readied: set by MAKE READY — the next volley gets bonus accuracy/damage.
 // ---------------------------------------------------------------------------
 export class Ally extends Unit {
@@ -140,15 +181,23 @@ export class Ally extends Unit {
     this.reloadT = 0;
     this.reloadTime = 2.8;
     this.swordCd = 0;
-    this.fireCd = 0; // small human delay in fire-at-will mode
+    this.fireCd = 0;
   }
 
   slot(player) {
-    const off = this.idx === 0 ? -70 : 70;
+    const fx = player.faceX, fy = player.faceY;
+    const px = -fy, py = fx;            // perpendicular to facing
+    const side = this.idx === 0 ? -1 : 1;
     if (this.mode === 'behind') {
-      return { x: player.x + off * .6, y: clamp(player.y + 55, PLAY.top, PLAY.bottom) };
+      return {
+        x: clamp(player.x - fx * 60 + px * side * 35, PLAY.left, PLAY.right),
+        y: clamp(player.y - fy * 60 + py * side * 35, PLAY.top, PLAY.bottom),
+      };
     }
-    return { x: player.x + off, y: player.y };
+    return {
+      x: clamp(player.x + px * side * 70, PLAY.left, PLAY.right),
+      y: clamp(player.y + py * side * 70, PLAY.top, PLAY.bottom),
+    };
   }
 
   update(dt, scene) {
@@ -202,25 +251,46 @@ export class Ally extends Unit {
 }
 
 // ---------------------------------------------------------------------------
-// Enemy: sword infantry — runs at the nearest squad member and slashes.
+// Enemy: sword infantry. Spawn strength scales with the local danger level.
+// They will NOT cross into the village — at the safe edge they give up,
+// linger, and eventually slink away.
 // ---------------------------------------------------------------------------
 export class Enemy extends Unit {
-  constructor(scene, x, y, wave) {
-    super(scene, x, y, 'soldier_red', { hp: 70, speed: Math.min(150, 88 + wave * 5) });
+  constructor(scene, x, y) {
+    const danger = dangerAt(x);
+    super(scene, x, y, 'soldier_red', {
+      hp: Math.round(60 * (1 + danger * .9)),
+      speed: 90 + danger * 50,
+    });
+    this.dmg = Math.round(8 * (1 + danger * .7));
     this.atkCd = 0;
+    this.idleT = 0; // time spent with no reachable target
   }
 
   update(dt, scene) {
     if (!this.alive) return;
     this.atkCd = Math.max(0, this.atkCd - dt);
     const t = scene.nearestSquad(this);
-    if (t) {
+    const reachable = t && t.x >= SAFE_EDGE;
+
+    if (!reachable || this.x < SAFE_EDGE) {
+      // never enter the village: hold at the edge, get bored, leave
+      this.idleT += dt;
+      if (this.x < SAFE_EDGE + 40) this.moveToward(SAFE_EDGE + 80, this.y, dt, .8);
+      if (this.idleT > 6) {
+        this.alive = false;
+        this.scene.tweens.add({ targets: [this.sprite, this.shadow], alpha: 0, duration: 600 });
+        this.scene.time.delayedCall(700, () => this.destroy());
+      }
+    } else {
+      this.idleT = 0;
       const d = dist(this, t);
       if (d > 27 * dscale(this.y)) {
         this.moveToward(t.x, t.y, dt);
+        if (this.x < SAFE_EDGE) this.x = SAFE_EDGE;
       } else if (this.atkCd <= 0) {
         this.atkCd = .8;
-        t.takeDamage(9);
+        t.takeDamage(this.dmg);
         scene.slashFx(this.x, this.y - 10, Math.atan2(t.y - this.y, t.x - this.x), 0xff8866);
       }
     }
