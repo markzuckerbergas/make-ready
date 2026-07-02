@@ -273,6 +273,16 @@ export class BattleScene extends Phaser.Scene {
       b.y += b.vy * dt;
       b.life -= dt;
       b.img.setPosition(b.x, b.y);
+      // solid cover: a round that crosses a trunk or boulder stops there
+      for (const o of this.obstacles) {
+        if (Math.abs(b.x - o.x) < o.r * .85 && b.y > o.y - o.blockH && b.y < o.y + 3) {
+          b.life = 0;
+          const puff = this.add.circle(b.x, b.y, 4, 0x9aa38a, .7).setDepth(9000);
+          this.tweens.add({ targets: puff, alpha: 0, scale: 2, duration: 250, onComplete: () => puff.destroy() });
+          break;
+        }
+      }
+      if (b.life <= 0) { b.img.destroy(); b.dead = true; continue; }
       const targets = b.hostile ? [this.player, ...this.allies] : this.enemies;
       for (const u of targets) {
         if (!u.alive) continue;
@@ -361,7 +371,11 @@ export class BattleScene extends Phaser.Scene {
   }
 
   addLoot(type, x) {
-    const y = PLAY.top + 20 + Math.random() * (PLAY.bottom - PLAY.top - 40);
+    let y = PLAY.top + 20 + Math.random() * (PLAY.bottom - PLAY.top - 40);
+    for (let tries = 0; tries < 8; tries++) {
+      if (!this.obstacles.some(o => Math.hypot(x - o.x, y - o.y) < o.r + 16)) break;
+      y = PLAY.top + 20 + Math.random() * (PLAY.bottom - PLAY.top - 40);
+    }
     const ds = dscale(y);
     const img = this.add.image(x, y - 6 * ds, type === 'supply' ? 'crate' : 'artifact')
       .setScale(ds).setDepth(y);
@@ -712,6 +726,9 @@ export class BattleScene extends Phaser.Scene {
   }
 
   placeScenery() {
+    // Trees and rocks are SOLID: units can't walk through them and their
+    // body stops bullets — cover works for you and against you.
+    this.obstacles = [];
     for (let i = 0; i < 46; i++) {
       const x = 500 + Math.random() * (WORLD_W - 560);
       const y = PLAY.top + Math.random() * (PLAY.bottom - PLAY.top);
@@ -719,6 +736,26 @@ export class BattleScene extends Phaser.Scene {
       const ds = dscale(y);
       this.add.image(x, y - (key === 'tree' ? 18 : 4) * ds, key).setScale(ds * 1.4).setDepth(y);
       this.add.image(x, y, 'shadow').setScale(ds * (key === 'tree' ? 1.4 : .9)).setAlpha(.25).setDepth(y - .1);
+      this.obstacles.push({
+        x, y,
+        r: (key === 'tree' ? 10 : 12) * ds,        // footprint (movement)
+        blockH: (key === 'tree' ? 40 : 12) * ds,   // how tall it stands (bullets)
+      });
+    }
+  }
+
+  // Push a unit out of any obstacle footprint it overlaps — walking into a
+  // tree slides you around it instead of through it.
+  resolveObstacles(unit) {
+    if (!this.obstacles) return;
+    for (const o of this.obstacles) {
+      const dx = unit.x - o.x, dy = unit.y - o.y;
+      const min = o.r + 6 * dscale(unit.y);
+      const d = Math.hypot(dx, dy);
+      if (d < min && d > .001) {
+        unit.x = o.x + (dx / d) * min;
+        unit.y = o.y + (dy / d) * min;
+      }
     }
   }
 }

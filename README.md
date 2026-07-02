@@ -59,6 +59,12 @@ you what you're facing:
 Rifle enemies take seconds to reload — their reload bar shows above their
 heads. That's your window to charge.
 
+### Cover
+
+Trees and rocks are solid: units slide around them, and their trunks and
+bodies stop musket balls — for both sides. Duck behind a boulder while a
+marksman reloads; watch skirmishers do the same to you.
+
 ### Risk & reward
 
 - **Supply crates** heal the whole squad — scattered everywhere.

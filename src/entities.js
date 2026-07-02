@@ -40,6 +40,7 @@ export class Unit {
   }
 
   clampToField() {
+    this.scene.resolveObstacles?.(this); // trees & rocks are solid
     this.x = clamp(this.x, PLAY.left, PLAY.right);
     this.y = clamp(this.y, PLAY.top, PLAY.bottom);
   }
