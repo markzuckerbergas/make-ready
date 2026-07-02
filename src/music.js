@@ -3,7 +3,7 @@ import { initStrudel } from '@strudel/web';
 // ---------------------------------------------------------------------------
 // MusicDirector — one Strudel stack, started once, never re-evaluated.
 //
-// The game writes a snapshot every frame; the director eases six mood
+// The game writes a snapshot every frame; the director eases five mood
 // variables toward targets derived from it. Every layer's gain (and some
 // filters) is a Strudel signal() reading those variables, so the soundtrack
 // follows the journey continuously:
@@ -13,15 +13,14 @@ import { initStrudel } from '@strudel/web';
 //             the east feels uneasy)
 //   combat  — enemies engaged nearby
 //   intensity — how bad the fight is (enemy count + squad wounds)
-//   hope    — the skirmish is almost won
-//   victory — fanfare when the last nearby enemy falls, decaying into calm
+//   hope    — a big engagement is nearly won (enemy count collapsed to ~5%
+//             of its peak); small skirmishes just ease combat -> calm
 //
 // Everything is diatonic to C major / A minor so any crossfade stays musical.
 // ---------------------------------------------------------------------------
 class MusicDirector {
   constructor() {
-    this.mood = { home: 1, dread: 0, combat: 0, intensity: 0, hope: 0, victory: 0 };
-    this.victoryHold = 0;
+    this.mood = { home: 1, dread: 0, combat: 0, intensity: 0, hope: 0 };
     this.defeated = false;
     this.started = false;
     this.ready = Promise.resolve(
@@ -46,13 +45,8 @@ class MusicDirector {
 
   setDefeated(v) { this.defeated = v; }
 
-  onCombatWon() {
-    if (this.defeated) return;
-    this.victoryHold = 5; // seconds of fanfare before drifting back to calm
-  }
-
   // Linear ease toward a target at a per-second rate — slow rates make the
-  // long transitions (combat tail, victory fade) feel gradual.
+  // long transitions (like the combat tail back to calm) feel gradual.
   ease(key, target, rate, dt) {
     const c = this.mood[key];
     const d = target - c;
@@ -61,7 +55,6 @@ class MusicDirector {
   }
 
   update(dt, snap) {
-    this.victoryHold = Math.max(0, this.victoryHold - dt);
     const inCombat = snap.enemies > 0 && !this.defeated;
 
     this.ease('home', snap.home ? 1 : 0, .4, dt);
@@ -74,11 +67,12 @@ class MusicDirector {
       ? Math.min(1, .2 + .5 * enemyFactor + .45 * snap.danger + .5 * hurtFactor) : 0;
     this.ease('intensity', intensityTarget, .3, dt);
 
-    const hopeful = inCombat && snap.enemies <= 1 && this.mood.combat > .5;
-    this.ease('hope', hopeful ? 1 : 0, hopeful ? .6 : .35, dt);
-
-    const victoryTarget = this.victoryHold > 0 && !this.defeated ? 1 : 0;
-    this.ease('victory', victoryTarget, victoryTarget ? 1.2 : .12, dt);
+    // hopeful only when a BIG engagement is nearly won: the enemy count
+    // peaked high and has collapsed to ~5% of that peak. Small skirmishes
+    // skip it and just ease combat -> calm.
+    const nearlyWon = snap.enemies <= Math.max(1, Math.round(snap.peak * .05));
+    const hopeful = inCombat && snap.peak >= 4 && nearlyWon;
+    this.ease('hope', hopeful ? 1 : 0, hopeful ? .6 : .3, dt);
   }
 
   buildTrack() {
@@ -86,7 +80,7 @@ class MusicDirector {
     const { note, sound, stack, signal } = globalThis;
     const m = this.mood;
     const sig = fn => signal(fn);
-    const calm = () => (1 - m.combat) * (1 - m.victory);
+    const calm = () => 1 - m.combat;
 
     return stack(
       // ---- CALM: wandering ---------------------------------------------------
@@ -136,13 +130,6 @@ class MusicDirector {
       note('<[e4 g4] [c5 b4] [a4 g4] [e4 ~]>').sound('triangle').room(.5)
         .gain(sig(() => m.hope * .3)),
 
-      // ---- VICTORY: fanfare, then it decays into calm --------------------------
-      note('<[c4 c4 c4 e4] [g4 g4 ~ e4] [g4 ~ c5 ~] [c5 ~ ~ ~]>')
-        .sound('sawtooth').lpf(2500).delay(.25).room(.4)
-        .gain(sig(() => m.victory * .5)),
-      note('[c3,e3,g3,c4]').sound('sawtooth').attack(.4).release(1)
-        .lpf(1600).room(.5)
-        .gain(sig(() => m.victory * .3)),
     ).slow(1.25); // default 0.5 cps = 120 BPM @ 4 beats/cycle -> 96 BPM
   }
 }

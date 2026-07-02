@@ -31,8 +31,10 @@ export class BattleScene extends Phaser.Scene {
     this.treasure = 0;
     this.spawnT = 2;
     this.engaged = false;   // currently in a fight?
+    this.combatPeak = 0;    // biggest enemy count of the current engagement
     this.villageT = 0;      // time spent resting in the village
     this.defeated = false;
+    this.soundUnlocked = false; // first gesture only unlocks audio, never fires
 
     this.cameras.main.setBounds(0, 0, WORLD_W, 540);
 
@@ -48,9 +50,12 @@ export class BattleScene extends Phaser.Scene {
 
     this.input.on('pointerdown', pointer => {
       if (this.defeated) return;
+      // the click that unlocks the browser's audio must not also fire a shot
+      if (!this.soundUnlocked) { this.soundUnlocked = true; return; }
       const a = Math.atan2(pointer.worldY - (this.player.y - 12), pointer.worldX - this.player.x);
       this.player.attack(a);
     });
+    this.input.keyboard.once('keydown', () => { this.soundUnlocked = true; });
 
     const cmd = (key, fn) => this.input.keyboard.on(`keydown-${key}`, fn);
     cmd('SPACE', () => { if (!this.defeated) this.player.swing(); });
@@ -75,19 +80,28 @@ export class BattleScene extends Phaser.Scene {
     this.announce(shout);
   }
 
+  // MAKE READY is the whole drill in one order: everyone reloads (including
+  // the player, if the rifle is in hand) and the allies brace for a volley.
   makeReady() {
     if (this.defeated) return;
     let any = false;
     for (const a of this.allies) {
-      if (a.alive && a.mode !== 'charge') { a.readied = true; any = true; }
+      if (a.alive && a.mode !== 'charge') { a.readied = true; a.orderReload(); any = true; }
     }
+    if (this.player.alive && this.player.weapon === 'rifle') this.player.reload();
     if (any) this.announce('MAKE READY!');
   }
 
   volley() {
     if (this.defeated) return;
+    const able = this.allies.filter(a => a.alive && a.loaded);
+    if (!able.length) {
+      this.toast(this.allies.some(a => a.alive) ? 'muskets empty — Q to make ready!' : 'no one left to fire…');
+      return;
+    }
+    if (!able.some(a => this.nearestEnemy(a, 880))) { this.toast('no targets in range'); return; }
     this.announce('FIRE!');
-    this.allies.forEach((a, i) =>
+    able.forEach((a, i) =>
       this.time.delayedCall(i * 90, () => a.volley(this)));
   }
 
@@ -132,6 +146,40 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.add({ targets: arc, alpha: 0, scale: 1.5, duration: 160, onComplete: () => arc.destroy() });
   }
 
+  // Formation slots relative to the player's facing: "line" extends
+  // perpendicular to it, "behind" is opposite to it. Slots are assigned to
+  // whichever ally is CLOSEST (minimal total travel), not by fixed index —
+  // so when the player spins around, allies swap slots instead of crossing
+  // each other's path diagonally.
+  assignFormationSlots() {
+    const alive = this.allies.filter(a => a.alive && (a.mode === 'line' || a.mode === 'behind' || a.mode === 'free'));
+    if (!alive.length) return;
+    const p = this.player;
+    const fx = p.faceX, fy = p.faceY;
+    const px = -fy, py = fx; // perpendicular to facing
+    const mode = alive[0].mode;
+    const mk = (bx, by, sx, sy) => ({
+      x: clamp(bx + sx, PLAY.left, PLAY.right),
+      y: clamp(by + sy, PLAY.top, PLAY.bottom),
+    });
+    const slots = mode === 'behind'
+      ? [mk(p.x - fx * 60, p.y - fy * 60, px * -35, py * -35),
+         mk(p.x - fx * 60, p.y - fy * 60, px * 35, py * 35)]
+      : [mk(p.x, p.y, px * -70, py * -70),
+         mk(p.x, p.y, px * 70, py * 70)];
+
+    if (alive.length === 1) {
+      const a = alive[0];
+      a.targetSlot = dist(a, slots[0]) <= dist(a, slots[1]) ? slots[0] : slots[1];
+      return;
+    }
+    const [a0, a1] = alive;
+    const straight = dist(a0, slots[0]) + dist(a1, slots[1]);
+    const swapped = dist(a0, slots[1]) + dist(a1, slots[0]);
+    if (swapped < straight) { a0.targetSlot = slots[1]; a1.targetSlot = slots[0]; }
+    else { a0.targetSlot = slots[0]; a1.targetSlot = slots[1]; }
+  }
+
   nearestEnemy(unit, range) {
     let best = null, bd = range;
     for (const e of this.enemies) {
@@ -165,6 +213,7 @@ export class BattleScene extends Phaser.Scene {
       up: k.W.isDown || k.UP.isDown,
       down: k.S.isDown || k.DOWN.isDown,
     });
+    this.assignFormationSlots();
     for (const a of this.allies) a.update(dt, this);
     for (const e of this.enemies) e.update(dt, this);
     this.enemies = this.enemies.filter(e => !e.removed);
@@ -335,16 +384,20 @@ export class BattleScene extends Phaser.Scene {
 
   musicSnapshot() {
     const near = this.enemies.filter(e => e.alive && dist(e, this.player) < 950).length;
-    if (near > 0) this.engaged = true;
+    if (near > 0) {
+      this.engaged = true;
+      this.combatPeak = Math.max(this.combatPeak, near);
+    }
     if (this.engaged && near === 0) {
       this.engaged = false;
-      if (!this.defeated) music.onCombatWon();
+      this.combatPeak = 0;
     }
     const squad = [this.player, ...this.allies].filter(u => u.alive);
     const avgHealth = squad.length
       ? squad.reduce((s, u) => s + u.hp / u.maxHp, 0) / squad.length : 0;
     return {
       enemies: near,
+      peak: this.combatPeak,
       avgHealth,
       danger: dangerAt(this.player.x),
       home: this.player.x < 520,
@@ -376,9 +429,6 @@ export class BattleScene extends Phaser.Scene {
       .setDepth(9400).setScrollFactor(0);
     this.hudRight = this.add.text(948, 8, '', { fontSize: 14, color: '#eee', align: 'right' })
       .setOrigin(1, 0).setDepth(9400).setScrollFactor(0);
-    this.add.text(480, 528,
-      'X switch weapon · click attack · R reload · SPACE sword —— 1 line · 2 behind me · 3 fire at will · 4 charge · Q make ready · E FIRE!',
-      { fontSize: 12, color: '#8a8f98' }).setOrigin(.5, 1).setDepth(9400).setScrollFactor(0);
   }
 
   updateHudText() {
@@ -388,7 +438,9 @@ export class BattleScene extends Phaser.Scene {
     const arm = p.weapon === 'rifle' ? `rifle in hand (${rifle})` : `sword in hand · rifle: ${rifle}`;
     const mode = this.allies.find(a => a.alive)?.mode ?? '-';
     const readied = this.allies.some(a => a.alive && a.readied) ? ' · READIED' : '';
-    this.hudLeft.setText(`${arm}\nallies: ${mode}${readied}\ntreasure: ${this.treasure}`);
+    const reloading = this.allies.some(a => a.alive && !a.loaded && a.reloadT > 0) ? ' · reloading…' : '';
+    const empty = this.allies.some(a => a.alive && !a.loaded && a.reloadT <= 0 && a.mode !== 'free') ? ' · muskets empty (Q)' : '';
+    this.hudLeft.setText(`${arm}\nallies: ${mode}${readied}${reloading}${empty}\ntreasure: ${this.treasure}`);
 
     const danger = dangerAt(p.x);
     const near = this.enemies.filter(e => e.alive).length;

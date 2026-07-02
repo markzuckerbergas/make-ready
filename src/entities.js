@@ -165,44 +165,39 @@ export class Player extends Unit {
 }
 
 // ---------------------------------------------------------------------------
-// Ally: obeys formation + fire commands. Formations are RELATIVE TO THE
-// PLAYER'S FACING: "line" extends perpendicular to it (a firing line facing
-// the same way), "behind" is opposite to it.
-//   modes: 'line' | 'behind' | 'free' (fire at will) | 'charge'
+// Ally: obeys formation + fire commands. Formation slots are computed by the
+// scene (relative to the player's facing, assigned to avoid crossing paths)
+// and handed to the ally as `targetSlot`.
+//   modes: 'behind' (default) | 'line' | 'free' (fire at will) | 'charge'
 //   readied: set by MAKE READY — the next volley gets bonus accuracy/damage.
+//
+// Musket drill: firing empties the musket and it STAYS empty in line/behind
+// modes until MAKE READY orders the reload. Fire-at-will manages its own.
 // ---------------------------------------------------------------------------
 export class Ally extends Unit {
   constructor(scene, x, y, idx) {
     super(scene, x, y, 'soldier_green', { hp: 100, speed: 150 });
     this.idx = idx;
-    this.mode = 'line';
+    this.mode = 'behind';
     this.readied = false;
     this.loaded = true;
-    this.reloadT = 0;
+    this.reloadT = 0;   // reload only ticks while > 0 (started by an order)
     this.reloadTime = 2.8;
     this.swordCd = 0;
     this.fireCd = 0;
+    this.targetSlot = { x, y };
   }
 
-  slot(player) {
-    const fx = player.faceX, fy = player.faceY;
-    const px = -fy, py = fx;            // perpendicular to facing
-    const side = this.idx === 0 ? -1 : 1;
-    if (this.mode === 'behind') {
-      return {
-        x: clamp(player.x - fx * 60 + px * side * 35, PLAY.left, PLAY.right),
-        y: clamp(player.y - fy * 60 + py * side * 35, PLAY.top, PLAY.bottom),
-      };
-    }
-    return {
-      x: clamp(player.x + px * side * 70, PLAY.left, PLAY.right),
-      y: clamp(player.y + py * side * 70, PLAY.top, PLAY.bottom),
-    };
+  orderReload() {
+    if (this.alive && !this.loaded && this.reloadT <= 0) this.reloadT = this.reloadTime;
   }
 
   update(dt, scene) {
     if (!this.alive) return;
-    if (!this.loaded) { this.reloadT -= dt; if (this.reloadT <= 0) this.loaded = true; }
+    if (!this.loaded && this.reloadT > 0) {
+      this.reloadT -= dt;
+      if (this.reloadT <= 0) this.loaded = true;
+    }
     this.swordCd = Math.max(0, this.swordCd - dt);
     this.fireCd = Math.max(0, this.fireCd - dt);
 
@@ -216,18 +211,20 @@ export class Ally extends Unit {
           scene.melee(this, Math.atan2(t.y - this.y, t.x - this.x), 40, 26);
         }
       } else {
-        this.mode = 'line'; // battle's over — fall back in
+        this.mode = 'behind'; // battle's over — fall back in
       }
     } else {
       const enemy = scene.nearestEnemy(this, 780);
       if (!this.readied) {
-        const s = this.slot(scene.player);
-        this.moveToward(s.x, s.y, dt);
+        this.moveToward(this.targetSlot.x, this.targetSlot.y, dt);
       }
       if (enemy) this.facing = enemy.x > this.x ? 1 : -1;
-      if (this.mode === 'free' && enemy && this.loaded && this.fireCd <= 0) {
-        this.fireCd = .4 + Math.random() * .6;
-        this.shoot(scene, enemy, 7, 40); // no bonus when firing at will
+      if (this.mode === 'free') {
+        this.orderReload(); // fire-at-will soldiers reload themselves
+        if (enemy && this.loaded && this.fireCd <= 0) {
+          this.fireCd = .4 + Math.random() * .6;
+          this.shoot(scene, enemy, 7, 40); // no bonus when firing at will
+        }
       }
     }
     this.clampToField();
@@ -236,7 +233,6 @@ export class Ally extends Unit {
 
   shoot(scene, target, spreadDeg, dmg) {
     this.loaded = false;
-    this.reloadT = this.reloadTime;
     this.readied = false;
     scene.shoot(this, Math.atan2(target.y - this.y, target.x - this.x), spreadDeg, dmg);
   }

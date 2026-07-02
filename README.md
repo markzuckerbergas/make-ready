@@ -5,8 +5,8 @@ soundtrack**. Your homestead lies at the western edge of a long stretch of
 wild country. The deeper east you push, the more (and stronger) enemies you
 meet — and the better the artifacts you can carry home. The music follows the
 journey: warm at the hearth, uneasy in deep ground, driving in combat (scaling
-with enemy numbers and your squad's wounds), hopeful as the skirmish turns,
-a fanfare when it's won, then smoothly back to calm.
+with enemy numbers and your squad's wounds), hopeful as a big engagement
+finally breaks, then smoothly back to calm.
 
 **▶ Play it: <https://markzuckerbergas.github.io/make-ready/>**
 
@@ -33,12 +33,15 @@ Commands to your two allies — formations are **relative to your facing**
 
 | Key | Order | Effect |
 |---|---|---|
-| **1** | FORM LINE | firing line abreast of you, perpendicular to your facing |
-| **2** | BEHIND ME | they line up at your back — you skirmish, they cover |
-| **Q** | MAKE READY | allies brace and aim |
+| **Q** | MAKE READY | everyone reloads (you too, rifle in hand) and allies brace |
 | **E** | FIRE! | volley — **readied volleys get bonus accuracy & damage** |
-| **3** | FIRE AT WILL | independent fire, no ready bonus |
+| **1** | FORM LINE | firing line abreast of you, perpendicular to your facing |
+| **2** | BEHIND ME | (default) they cover from your back |
+| **3** | FIRE AT WILL | independent fire, no ready bonus, self-reloading |
 | **4** | CHARGE | swords out, run the enemy down |
+
+The drill is real: after a volley the muskets stay **empty** until you order
+MAKE READY. Q → E is the rhythm of the line.
 
 ### Risk & reward
 
@@ -53,7 +56,7 @@ Commands to your two allies — formations are **relative to your facing**
 ## The adaptive music
 
 One Strudel `stack()` starts on your first click and is **never replaced**.
-The game writes a snapshot every frame; a `MusicDirector` eases six mood
+The game writes a snapshot every frame; a `MusicDirector` eases five mood
 variables toward targets from it, and every layer's gain (plus some filter
 cutoffs) is a `signal()` reading those variables live:
 
@@ -63,9 +66,9 @@ cutoffs) is a `signal()` reading those variables live:
 - **combat** — marching kick and military snare
 - **intensity** — enemy count + squad wounds + depth: adds a snare roll,
   a second kick, drive hats, and opens the bass filter
-- **hope** — major arps bloom in as the last enemies fall
-- **victory** — a fanfare when the skirmish is won, held ~5 s, then decaying
-  slowly back into calm
+- **hope** — major arps bloom in only when a *big* engagement (4+ enemies at
+  its peak) collapses to its last stragglers; small skirmishes just ease
+  from combat back to calm
 
 Everything is diatonic to C major / A minor, so any crossfade between moods
 stays musical. See [`src/music.js`](./src/music.js) — the whole system is
