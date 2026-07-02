@@ -76,7 +76,10 @@ export class Unit {
       const want = this.currentTexture();
       if (this.sprite.texture.key !== want) this.sprite.setTexture(want);
     }
-    this.sprite.setPosition(this.x, this.y - 13 * ds)
+    // ramrod bob: anyone working a reload pumps up and down a little
+    const bob = (this.alive && this.loaded === false && this.reloadT > 0)
+      ? Math.sin(this.scene.time.now / 55) * 1.4 * ds : 0;
+    this.sprite.setPosition(this.x, this.y - 13 * ds + bob)
       .setScale(ds * this.facing, ds)
       .setDepth(this.y);
     this.shadow.setPosition(this.x, this.y).setScale(ds).setDepth(this.y - .1);
@@ -105,7 +108,10 @@ export class Player extends Unit {
     this.reloadT = 0;
     this.reloadTime = 2.2;
     this.swordCd = 0;
-    this.faceX = 1; this.faceY = 0; // facing vector (last movement direction)
+    this.faceX = 1; this.faceY = 0; // facing vector (last committed direction)
+    this.moving = false;
+    this.pendingDir = null;  // candidate facing (octant key)
+    this.pendingT = 0;       // how long it's been held
   }
 
   update(dt, input) {
@@ -115,15 +121,26 @@ export class Player extends Unit {
     if (input.right) dx += 1;
     if (input.up) dy -= 1;
     if (input.down) dy += 1;
-    if (dx || dy) {
+    this.moving = !!(dx || dy);
+    if (this.moving) {
       const n = Math.hypot(dx, dy);
       const s = this.speed * dscale(this.y) * dt;
       this.x += (dx / n) * s;
       this.y += (dy / n) * s;
-      this.faceX = dx / n; this.faceY = dy / n;
-      if (dx) this.facing = dx > 0 ? 1 : -1;
-      this.dirUp = Math.abs(dy) > Math.abs(dx) && dy < 0;
       this.clampToField();
+      // Commit facing only after the direction is HELD briefly. Without this,
+      // releasing two keys of a diagonal a frame apart snaps the facing to a
+      // cardinal — diagonals could never stick for formations or the sword.
+      const key = `${Math.sign(dx)},${Math.sign(dy)}`;
+      if (key === this.pendingDir) this.pendingT += dt;
+      else { this.pendingDir = key; this.pendingT = 0; }
+      if (this.pendingT >= .06) {
+        this.faceX = dx / n; this.faceY = dy / n;
+        if (dx) this.facing = dx > 0 ? 1 : -1;
+        this.dirUp = Math.abs(dy) > Math.abs(dx) && dy < 0;
+      }
+    } else {
+      this.pendingDir = null; this.pendingT = 0;
     }
     if (this.reloadT > 0) {
       this.reloadT -= dt;
@@ -266,25 +283,49 @@ export class Ally extends Unit {
 }
 
 // ---------------------------------------------------------------------------
-// Enemy: sword infantry. Spawn strength scales with the local danger level.
-// They will NOT cross into the village — at the safe edge they give up,
+// Enemies: five types, unlocked as the ground gets more dangerous.
+//   grunt      — melee, slow          (everywhere)
+//   skirmisher — rifle, wild aim      (danger > 12%)
+//   runner     — melee, fast          (danger > 30%)
+//   marksman   — rifle, deadly aim    (danger > 50%)
+//   veteran    — rifle at range, sword up close (danger > 70%)
+// Rifle enemies keep their distance, fire hostile bullets and take time to
+// reload (their reload bar shows — that's your window to close in).
+// They will NOT cross into the village: at the safe edge they give up,
 // linger, and eventually slink away.
 // ---------------------------------------------------------------------------
+export const ENEMY_TYPES = {
+  grunt:      { tex: 'enemy_grunt',      hp: 60, speed: 62,  melee: { dmg: 8,  cd: .85 } },
+  skirmisher: { tex: 'enemy_skirmisher', hp: 50, speed: 78,  rifle: { range: 430, spread: 13, dmg: 9,  reload: 3.6 } },
+  runner:     { tex: 'enemy_runner',     hp: 45, speed: 160, melee: { dmg: 7,  cd: .6 } },
+  marksman:   { tex: 'enemy_marksman',   hp: 55, speed: 74,  rifle: { range: 580, spread: 3,  dmg: 16, reload: 3.4 } },
+  veteran:    { tex: 'enemy_veteran',    hp: 95, speed: 105, melee: { dmg: 12, cd: .7 },
+                                                             rifle: { range: 470, spread: 6,  dmg: 12, reload: 3 } },
+};
+
 export class Enemy extends Unit {
-  constructor(scene, x, y) {
-    const danger = dangerAt(x);
-    super(scene, x, y, 'soldier_red', {
-      hp: Math.round(60 * (1 + danger * .9)),
-      speed: 90 + danger * 50,
+  constructor(scene, x, y, type = 'grunt') {
+    const spec = ENEMY_TYPES[type];
+    super(scene, x, y, spec.tex, {
+      hp: Math.round(spec.hp * (1 + dangerAt(x) * .4)), // deep-east ones are hardier
+      speed: spec.speed,
     });
-    this.dmg = Math.round(8 * (1 + danger * .7));
+    this.type = type;
+    this.spec = spec;
     this.atkCd = 0;
+    this.loaded = !!spec.rifle;
+    this.reloadT = 0;
+    this.reloadTime = spec.rifle?.reload ?? 0;
     this.idleT = 0; // time spent with no reachable target
   }
 
   update(dt, scene) {
     if (!this.alive) return;
     this.atkCd = Math.max(0, this.atkCd - dt);
+    if (this.spec.rifle && !this.loaded && this.reloadT > 0) {
+      this.reloadT -= dt;
+      if (this.reloadT <= 0) this.loaded = true;
+    }
     const t = scene.nearestSquad(this);
     const reachable = t && t.x >= SAFE_EDGE;
 
@@ -300,14 +341,36 @@ export class Enemy extends Unit {
     } else {
       this.idleT = 0;
       const d = dist(this, t);
-      if (d > 27 * dscale(this.y)) {
-        this.moveToward(t.x, t.y, dt);
-        if (this.x < SAFE_EDGE) this.x = SAFE_EDGE;
-      } else if (this.atkCd <= 0) {
-        this.atkCd = .8;
-        t.takeDamage(this.dmg);
-        scene.slashFx(this.x, this.y - 10, Math.atan2(t.y - this.y, t.x - this.x), 0xff8866);
+      const spec = this.spec;
+      const meleeRange = 27 * dscale(this.y);
+      // veterans switch to steel up close; pure riflemen always prefer distance
+      const useRifle = spec.rifle && (!spec.melee || d > 140);
+
+      if (useRifle) {
+        if (d > spec.rifle.range * .85) {
+          this.moveToward(t.x, t.y, dt);
+        } else if (d < spec.rifle.range * .35) {
+          this.moveToward(this.x + (this.x - t.x), this.y + (this.y - t.y), dt, .55); // give ground
+        } else {
+          this.facing = t.x > this.x ? 1 : -1;
+        }
+        if (this.loaded && this.atkCd <= 0 && d <= spec.rifle.range) {
+          this.atkCd = .5;
+          this.loaded = false;
+          this.reloadT = spec.rifle.reload;
+          const a = Math.atan2((t.y - 13 * dscale(t.y)) - (this.y - 13 * dscale(this.y)), t.x - this.x);
+          scene.shoot(this, a, spec.rifle.spread, spec.rifle.dmg, true);
+        }
+      } else if (spec.melee) {
+        if (d > meleeRange) {
+          this.moveToward(t.x, t.y, dt);
+        } else if (this.atkCd <= 0) {
+          this.atkCd = spec.melee.cd;
+          t.takeDamage(spec.melee.dmg);
+          scene.slashFx(this.x, this.y - 10, Math.atan2(t.y - this.y, t.x - this.x), 0xff8866);
+        }
       }
+      if (this.x < SAFE_EDGE) this.x = SAFE_EDGE; // even retreating, never into the village
     }
     this.clampToField();
     this.updateVisual(dt);

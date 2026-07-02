@@ -35,13 +35,29 @@ Commands to your two allies — formations are **relative to your facing**
 |---|---|---|
 | **Q** | MAKE READY | everyone reloads (you too, rifle in hand) and allies brace |
 | **E** | FIRE! | volley — **readied volleys get bonus accuracy & damage** |
-| **1** | FORM LINE | firing line abreast of you, perpendicular to your facing |
+| **1** | FORM LINE | firing line abreast of you — only holds while you stand still |
 | **2** | BEHIND ME | (default) they cover from your back |
 | **3** | FIRE AT WILL | fast but the wildest aim in the game; self-reloading |
 | **4** | CHARGE | swords out, run the enemy down |
 
 The drill is real: after a volley the muskets stay **empty** until you order
 MAKE READY. Q → E is the rhythm of the line.
+
+### The enemy
+
+Five types, unlocked as the ground gets more dangerous — the coat color tells
+you what you're facing:
+
+| Type | Coat | Danger | Behaviour |
+|---|---|---|---|
+| grunt | dark red | anywhere | melee, slow |
+| skirmisher | orange | >12% | rifle, wild aim, keeps distance |
+| runner | bright crimson | >30% | melee, fast |
+| marksman | purple | >50% | rifle, deadly aim, long range |
+| veteran | black & gold | >70% | rifle at range, sabre up close |
+
+Rifle enemies take seconds to reload — their reload bar shows above their
+heads. That's your window to charge.
 
 ### Risk & reward
 

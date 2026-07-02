@@ -67,7 +67,10 @@ export class BattleScene extends Phaser.Scene {
     cmd('R', () => { if (!this.defeated) this.player.reload(); });
     cmd('X', () => { if (!this.defeated) this.player.switchWeapon(); });
     cmd('TAB', () => { if (!this.defeated) this.player.switchWeapon(); });
-    cmd('ONE', () => this.command('line', 'FORM LINE!'));
+    cmd('ONE', () => {
+      if (this.player.moving) { this.toast('hold still to form a line'); return; }
+      this.command('line', 'FORM LINE!');
+    });
     cmd('TWO', () => this.command('behind', 'BEHIND ME!'));
     cmd('THREE', () => this.command('free', 'FIRE AT WILL!'));
     cmd('FOUR', () => this.command('charge', 'CHAAARGE!'));
@@ -113,14 +116,14 @@ export class BattleScene extends Phaser.Scene {
   // -------------------------------------------------------------------------
   // Combat helpers (used by entities)
   // -------------------------------------------------------------------------
-  shoot(unit, angle, spreadDeg, dmg) {
+  shoot(unit, angle, spreadDeg, dmg, hostile = false) {
     const spread = (Math.random() - .5) * 2 * spreadDeg * (Math.PI / 180);
     const a = angle + spread;
     const ds = dscale(unit.y);
     const mx = unit.x + Math.cos(a) * 16 * ds;
     const my = unit.y - 13 * ds + Math.sin(a) * 6;
     const img = this.add.image(mx, my, 'bullet').setRotation(a).setDepth(unit.y);
-    this.bullets.push({ x: mx, y: my, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, dmg, life: .8, img });
+    this.bullets.push({ x: mx, y: my, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, dmg, life: .8, img, hostile });
     this.muzzleFx(mx, my);
     sfx.shot();
   }
@@ -233,12 +236,18 @@ export class BattleScene extends Phaser.Scene {
       up: k.W.isDown || k.UP.isDown,
       down: k.S.isDown || k.DOWN.isDown,
     });
+    // a firing line only holds while you stand still — march and it breaks
+    if (this.player.moving && this.allies.some(a => a.alive && a.mode === 'line')) {
+      for (const a of this.allies) if (a.alive && a.mode === 'line') a.mode = 'behind';
+      this.toast('line broken — on me!');
+    }
     this.assignFormationSlots();
     for (const a of this.allies) a.update(dt, this);
     for (const e of this.enemies) e.update(dt, this);
     this.enemies = this.enemies.filter(e => !e.removed);
 
     this.updateCamera(dt);
+    this.updateSky();
     this.updateBullets(dt);
     this.updateSpawner(dt);
     this.updateLoot();
@@ -264,10 +273,11 @@ export class BattleScene extends Phaser.Scene {
       b.y += b.vy * dt;
       b.life -= dt;
       b.img.setPosition(b.x, b.y);
-      for (const e of this.enemies) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - b.x, (e.y - 13 * dscale(e.y)) - b.y) < 15 * dscale(e.y)) {
-          e.takeDamage(b.dmg);
+      const targets = b.hostile ? [this.player, ...this.allies] : this.enemies;
+      for (const u of targets) {
+        if (!u.alive) continue;
+        if (Math.hypot(u.x - b.x, (u.y - 13 * dscale(u.y)) - b.y) < 15 * dscale(u.y)) {
+          u.takeDamage(b.dmg);
           b.life = 0;
           break;
         }
@@ -306,7 +316,9 @@ export class BattleScene extends Phaser.Scene {
       const side = Math.random() < (.8 - danger * .25) ? 1 : -1;
       const ex = clamp(this.player.x + side * (560 + Math.random() * 260),
         SAFE_EDGE + 250, PLAY.right);
-      this.enemies.push(new Enemy(this, ex, PLAY.top + Math.random() * (PLAY.bottom - PLAY.top)));
+      this.enemies.push(new Enemy(this, ex,
+        PLAY.top + Math.random() * (PLAY.bottom - PLAY.top),
+        this.pickEnemyType(dangerAt(ex))));
     }
 
     // drop enemies the player has long outrun
@@ -316,6 +328,19 @@ export class BattleScene extends Phaser.Scene {
         e.destroy();
       }
     }
+  }
+
+  // Harder types join the pool as the local danger rises; grunts thin out.
+  pickEnemyType(d) {
+    const pool = [['grunt', Math.max(.15, 1 - d)]];
+    if (d > .12) pool.push(['skirmisher', .4 + d * .4]);
+    if (d > .3)  pool.push(['runner', .35 + d * .4]);
+    if (d > .5)  pool.push(['marksman', .3 + d * .5]);
+    if (d > .7)  pool.push(['veteran', .2 + d * .6]);
+    const total = pool.reduce((sum, [, w]) => sum + w, 0);
+    let r = Math.random() * total;
+    for (const [k, w] of pool) { r -= w; if (r <= 0) return k; }
+    return 'grunt';
   }
 
   // -------------------------------------------------------------------------
@@ -503,7 +528,7 @@ export class BattleScene extends Phaser.Scene {
       g.fillStyle(u === this.player ? 0x6fb7ff : friendly ? 0x3ecf6a : 0xe05252, .9)
         .fillRect(x, y, w * (u.hp / u.maxHp), 3);
       if (u.readied) g.fillStyle(0xffe9a0, 1).fillCircle(u.x, y - 5, 2.5);
-      if (u === this.player && u.reloadT > 0) {
+      if (u.reloadTime && u.reloadT > 0) {
         g.fillStyle(0x000000, .5).fillRect(x, y + 5, w, 2);
         g.fillStyle(0xe8c33a, .9).fillRect(x, y + 5, w * (1 - u.reloadT / u.reloadTime), 2);
       }
@@ -550,8 +575,17 @@ export class BattleScene extends Phaser.Scene {
     soldier('soldier_blue_sword_up', 0x2e5ea8, 0x9fc4ff, 'sword', 'up');
     soldier('soldier_green', 0x2f7a4d, 0xa8e6bd, 'rifle', 'side');
     soldier('soldier_green_up', 0x2f7a4d, 0xa8e6bd, 'rifle', 'up');
-    soldier('soldier_red', 0x9c2f2f, 0xe0a0a0, 'sword', 'side');
-    soldier('soldier_red_up', 0x9c2f2f, 0xe0a0a0, 'sword', 'up');
+    // enemy liveries — coat color tells you what you're facing
+    soldier('enemy_grunt', 0x9c2f2f, 0xe0a0a0, 'sword', 'side');
+    soldier('enemy_grunt_up', 0x9c2f2f, 0xe0a0a0, 'sword', 'up');
+    soldier('enemy_skirmisher', 0xa8642f, 0xe0b98a, 'rifle', 'side');
+    soldier('enemy_skirmisher_up', 0xa8642f, 0xe0b98a, 'rifle', 'up');
+    soldier('enemy_runner', 0xc23a3a, 0xf0c0c0, 'sword', 'side');
+    soldier('enemy_runner_up', 0xc23a3a, 0xf0c0c0, 'sword', 'up');
+    soldier('enemy_marksman', 0x6e2f5e, 0xc79ab8, 'rifle', 'side');
+    soldier('enemy_marksman_up', 0x6e2f5e, 0xc79ab8, 'rifle', 'up');
+    soldier('enemy_veteran', 0x2a2a30, 0xd9b45a, 'sword', 'side');
+    soldier('enemy_veteran_up', 0x2a2a30, 0xd9b45a, 'sword', 'up');
 
     let g = this.make.graphics({ add: false });
     g.fillStyle(0x000000); g.fillEllipse(10, 4, 20, 8);
@@ -596,11 +630,18 @@ export class BattleScene extends Phaser.Scene {
   }
 
   drawBackground() {
-    // layer 1: sky — fixed to the camera
-    const sky = this.add.graphics().setDepth(-120).setScrollFactor(0);
-    [0x1b2340, 0x252f4e, 0x374260, 0x54506b, 0x8a5f5a].forEach((c, i) => {
-      sky.fillStyle(c); sky.fillRect(0, i * 30, 960, 30);
-    });
+    // layer 1: sky — fixed to the camera; three stacked versions (day, dusk,
+    // night) whose alphas crossfade with how far east the player stands
+    const skyBands = (cols, depth) => {
+      const g = this.add.graphics().setDepth(depth).setScrollFactor(0);
+      cols.forEach((c, i) => { g.fillStyle(c); g.fillRect(0, i * 30, 960, 30); });
+      return g;
+    };
+    this.skyDay = skyBands([0x6fb7d9, 0x8ac6e2, 0xa9d6ea, 0xd3d3b8, 0xe8c187], -122);
+    this.skyDusk = skyBands([0x1b2340, 0x252f4e, 0x374260, 0x54506b, 0x8a5f5a], -121);
+    this.skyNight = skyBands([0x04060d, 0x080b16, 0x0d1120, 0x12172a, 0x1d2236], -120);
+    this.skyDusk.setAlpha(0);
+    this.skyNight.setAlpha(0);
 
     // layer 2: distant mountains — slow parallax
     const mts = this.add.graphics().setDepth(-110).setScrollFactor(.35);
@@ -624,6 +665,25 @@ export class BattleScene extends Phaser.Scene {
     g.fillStyle(0x20281a); g.fillRect(0, y, WORLD_W, 560 - y);
     // village ground is warmer, worn earth
     g.fillStyle(0x4a4030, .55); g.fillRect(0, 150, SAFE_EDGE - 90, 410);
+
+    // night falls toward the east: strips of deepening dark laid over the
+    // world (above entities, below HUD) — day at the village, night out deep
+    const nightG = this.add.graphics().setDepth(8000);
+    const STRIPS = 26, x0 = 800;
+    for (let i = 0; i < STRIPS; i++) {
+      const sx = x0 + (i / STRIPS) * (WORLD_W - x0);
+      const alpha = .5 * Math.pow((i + 1) / STRIPS, 1.4);
+      nightG.fillStyle(0x0a0c1e, alpha);
+      nightG.fillRect(sx, PLAY.horizon, (WORLD_W - x0) / STRIPS + 1, 560 - PLAY.horizon);
+    }
+  }
+
+  // crossfade the fixed sky with how far east the player stands
+  updateSky() {
+    const t = clamp(this.player.x / WORLD_W, 0, 1);
+    const ramp = (a, b) => clamp((t - a) / (b - a), 0, 1);
+    this.skyDusk.setAlpha(ramp(.08, .4));   // day fades into dusk
+    this.skyNight.setAlpha(ramp(.5, .85));  // dusk sinks into night
   }
 
   buildVillage() {
