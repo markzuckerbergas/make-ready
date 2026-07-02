@@ -1,4 +1,5 @@
 import { PLAY, SAFE_EDGE, dangerAt, dscale, clamp, dist } from './world.js';
+import { sfx } from './sfx.js';
 
 // ---------------------------------------------------------------------------
 // Base unit: position in world coords, hp, facing, sprite + shadow that get
@@ -12,19 +13,29 @@ export class Unit {
     this.speed = opts.speed ?? 150;
     this.alive = true;
     this.removed = false;
-    this.facing = 1; // sprite flip: 1 = right, -1 = left
+    this.facing = 1;   // sprite flip: 1 = right, -1 = left
+    this.dirUp = false; // walking away from camera -> back view (hair!)
+    this.baseTex = texture;
     this.flashT = 0;
     this.shadow = scene.add.image(x, y, 'shadow').setAlpha(.3);
     this.sprite = scene.add.image(x, y, texture);
+  }
+
+  // Which texture matches the current pose. Subclasses may override
+  // (the player also picks by weapon in hand).
+  currentTexture() {
+    return `${this.baseTex}${this.dirUp ? '_up' : ''}`;
   }
 
   moveToward(tx, ty, dt, speedMul = 1) {
     const d = Math.hypot(tx - this.x, ty - this.y);
     if (d < 3) return true;
     const s = Math.min(d, this.speed * speedMul * dscale(this.y) * dt);
-    this.x += ((tx - this.x) / d) * s;
-    this.y += ((ty - this.y) / d) * s;
-    if (Math.abs(tx - this.x) > 2) this.facing = tx > this.x ? 1 : -1;
+    const dx = tx - this.x, dy = ty - this.y;
+    this.x += (dx / d) * s;
+    this.y += (dy / d) * s;
+    if (Math.abs(dx) > 2) this.facing = dx > 0 ? 1 : -1;
+    this.dirUp = Math.abs(dy) > Math.abs(dx) && dy < 0;
     return d < 8;
   }
 
@@ -61,6 +72,10 @@ export class Unit {
 
   updateVisual(dt) {
     const ds = dscale(this.y);
+    if (this.alive) {
+      const want = this.currentTexture();
+      if (this.sprite.texture.key !== want) this.sprite.setTexture(want);
+    }
     this.sprite.setPosition(this.x, this.y - 13 * ds)
       .setScale(ds * this.facing, ds)
       .setDepth(this.y);
@@ -83,6 +98,7 @@ export class Unit {
 export class Player extends Unit {
   constructor(scene, x, y) {
     super(scene, x, y, 'soldier_blue_rifle', { hp: 120, speed: 175 });
+    this.baseTex = 'soldier_blue';
     this.weapon = 'rifle';    // 'rifle' | 'sword'
     this.switchT = 0;         // >0 while stowing/drawing
     this.loaded = true;
@@ -106,11 +122,12 @@ export class Player extends Unit {
       this.y += (dy / n) * s;
       this.faceX = dx / n; this.faceY = dy / n;
       if (dx) this.facing = dx > 0 ? 1 : -1;
+      this.dirUp = Math.abs(dy) > Math.abs(dx) && dy < 0;
       this.clampToField();
     }
     if (this.reloadT > 0) {
       this.reloadT -= dt;
-      if (this.reloadT <= 0) { this.loaded = true; this.scene.toast('rifle loaded'); }
+      if (this.reloadT <= 0) { this.loaded = true; sfx.reloadDone(); this.scene.toast('rifle loaded'); }
     }
     if (this.switchT > 0) this.switchT -= dt;
     this.swordCd = Math.max(0, this.swordCd - dt);
@@ -118,6 +135,10 @@ export class Player extends Unit {
   }
 
   faceAngle() { return Math.atan2(this.faceY, this.faceX); }
+
+  currentTexture() {
+    return `soldier_blue_${this.weapon}${this.dirUp ? '_up' : ''}`;
+  }
 
   // X / TAB: stow one weapon, draw the other. Takes a moment — mid-switch
   // you can't attack, and the sprite swaps halfway through.
@@ -127,10 +148,7 @@ export class Player extends Unit {
     const next = this.weapon === 'rifle' ? 'sword' : 'rifle';
     this.scene.toast(next === 'sword' ? 'stowing rifle… sword out!' : 'sheathing sword… rifle up!');
     this.scene.tweens.add({ targets: this.sprite, angle: { from: -12, to: 0 }, duration: 480, ease: 'Back.easeOut' });
-    this.scene.time.delayedCall(250, () => {
-      this.weapon = next;
-      this.sprite.setTexture(next === 'sword' ? 'soldier_blue_sword' : 'soldier_blue_rifle');
-    });
+    this.scene.time.delayedCall(250, () => { this.weapon = next; });
   }
 
   attack(pointerAngle) {
@@ -159,6 +177,7 @@ export class Player extends Unit {
     if (this.weapon !== 'rifle') { this.scene.toast('rifle is on your back (X)'); return; }
     if (!this.loaded && this.reloadT <= 0) {
       this.reloadT = this.reloadTime;
+      sfx.reloadStart();
       this.scene.toast('reloading…');
     }
   }
@@ -202,7 +221,7 @@ export class Ally extends Unit {
     this.fireCd = Math.max(0, this.fireCd - dt);
 
     if (this.mode === 'charge') {
-      const t = scene.nearestEnemy(this, 2000);
+      const t = scene.nearestVisibleEnemy(this, 2000);
       if (t) {
         const d = dist(this, t);
         if (d > 34 * dscale(this.y)) this.moveToward(t.x, t.y, dt, 1.25);
@@ -223,7 +242,7 @@ export class Ally extends Unit {
         this.orderReload(); // fire-at-will soldiers reload themselves
         if (enemy && this.loaded && this.fireCd <= 0) {
           this.fireCd = .4 + Math.random() * .6;
-          this.shoot(scene, enemy, 7, 40); // no bonus when firing at will
+          this.shoot(scene, enemy, 11, 38); // wildest fire in the game
         }
       }
     }

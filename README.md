@@ -37,7 +37,7 @@ Commands to your two allies — formations are **relative to your facing**
 | **E** | FIRE! | volley — **readied volleys get bonus accuracy & damage** |
 | **1** | FORM LINE | firing line abreast of you, perpendicular to your facing |
 | **2** | BEHIND ME | (default) they cover from your back |
-| **3** | FIRE AT WILL | independent fire, no ready bonus, self-reloading |
+| **3** | FIRE AT WILL | fast but the wildest aim in the game; self-reloading |
 | **4** | CHARGE | swords out, run the enemy down |
 
 The drill is real: after a volley the muskets stay **empty** until you order
@@ -48,10 +48,14 @@ MAKE READY. Q → E is the rhythm of the line.
 - **Supply crates** heal the whole squad — scattered everywhere.
 - **Artifacts** shimmer and are worth treasure: *common → rare → epic →
   legendary*, with rarity set by the danger of the ground they lie on.
-  The legendary ones are only found deep east.
+  The legendary ones are only found deep east. Loot is only **banked when
+  you carry it back to the village** — fall in the field and everything
+  you were carrying is lost (what's banked stays).
 - There are no waves: enemy pressure is continuous and scales with how far
-  east you stand. West of the palisade is safe — enemies refuse to enter,
-  resting there heals you, and fallen allies rejoin after a few seconds.
+  east you stand — but clearing an engagement buys you ~30 seconds of quiet
+  in that area to loot and reload. West of the palisade is safe — enemies
+  refuse to enter, resting there heals you, and fallen allies rejoin after
+  a few seconds.
 
 ## The adaptive music
 

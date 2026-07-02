@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { WORLD_W, PLAY, SAFE_EDGE, dangerAt, dscale, clamp, dist } from './world.js';
 import { Player, Ally, Enemy } from './entities.js';
+import { sfx } from './sfx.js';
 import { music } from './music.js';
 
 const RARITIES = [
@@ -28,8 +29,12 @@ export class BattleScene extends Phaser.Scene {
     this.bullets = [];
     this.placeLoot();
 
-    this.treasure = 0;
+    // banked treasure survives death/restart; carried is lost if you fall
+    this.banked = this.registry.get('banked') ?? 0;
+    this.carried = 0;
     this.spawnT = 2;
+    this.clearedT = 0;   // spawn-suppression countdown after clearing an area
+    this.clearedX = 0;   // where the area was cleared
     this.engaged = false;   // currently in a fight?
     this.combatPeak = 0;    // biggest enemy count of the current engagement
     this.villageT = 0;      // time spent resting in the village
@@ -117,6 +122,7 @@ export class BattleScene extends Phaser.Scene {
     const img = this.add.image(mx, my, 'bullet').setRotation(a).setDepth(unit.y);
     this.bullets.push({ x: mx, y: my, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, dmg, life: .8, img });
     this.muzzleFx(mx, my);
+    sfx.shot();
   }
 
   muzzleFx(x, y) {
@@ -141,6 +147,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   slashFx(x, y, angle, color) {
+    sfx.sword();
     const arc = this.add.arc(x, y, 26, Phaser.Math.RadToDeg(angle) - 45,
       Phaser.Math.RadToDeg(angle) + 45, false, color, .7).setDepth(9000);
     this.tweens.add({ targets: arc, alpha: 0, scale: 1.5, duration: 160, onComplete: () => arc.destroy() });
@@ -184,6 +191,19 @@ export class BattleScene extends Phaser.Scene {
     let best = null, bd = range;
     for (const e of this.enemies) {
       if (!e.alive) continue;
+      const d = dist(unit, e);
+      if (d < bd) { bd = d; best = e; }
+    }
+    return best;
+  }
+
+  // Like nearestEnemy, but only counts enemies the player can actually SEE —
+  // allies never charge off toward something beyond the camera.
+  nearestVisibleEnemy(unit, range) {
+    const cx = this.cameras.main.scrollX;
+    let best = null, bd = range;
+    for (const e of this.enemies) {
+      if (!e.alive || e.x < cx - 40 || e.x > cx + 1000) continue;
       const d = dist(unit, e);
       if (d < bd) { bd = d; best = e; }
     }
@@ -263,9 +283,14 @@ export class BattleScene extends Phaser.Scene {
   // Continuous danger-gradient spawner: no waves. The further east the
   // player is, the more (and stronger) enemies keep the pressure on.
   updateSpawner(dt) {
+    this.clearedT = Math.max(0, this.clearedT - dt);
     this.spawnT -= dt;
     if (this.spawnT > 0 || this.defeated) return;
     this.spawnT = .9;
+
+    // a cleared area stays quiet for a while — pushing deeper (or wandering
+    // far from where you cleared) ends the respite
+    if (this.clearedT > 0 && Math.abs(this.player.x - this.clearedX) < 450) return;
 
     const danger = dangerAt(this.player.x);
     if (this.player.x < SAFE_EDGE + 100 || danger <= 0) return;
@@ -339,8 +364,8 @@ export class BattleScene extends Phaser.Scene {
         }
         this.toast('+25 hp — supplies shared');
       } else {
-        this.treasure += l.rarity.value;
-        this.announce(`${l.rarity.name} artifact! +${l.rarity.value}`,
+        this.carried += l.rarity.value;
+        this.announce(`${l.rarity.name} artifact! +${l.rarity.value} — carry it home`,
           '#' + l.rarity.tint.toString(16).padStart(6, '0'));
       }
     }
@@ -352,6 +377,12 @@ export class BattleScene extends Phaser.Scene {
   // -------------------------------------------------------------------------
   updateVillage(dt) {
     if (this.player.x >= 520 || !this.player.alive) { this.villageT = 0; return; }
+    if (this.carried > 0) {
+      this.banked += this.carried;
+      this.registry.set('banked', this.banked);
+      this.announce(`treasure secured: +${this.carried}`, '#ffd35a');
+      this.carried = 0;
+    }
     for (const u of [this.player, ...this.allies]) {
       if (u.alive) u.hp = Math.min(u.maxHp, u.hp + 5 * dt);
     }
@@ -375,7 +406,9 @@ export class BattleScene extends Phaser.Scene {
       this.add.rectangle(480, 270, 960, 540, 0x000000, .55).setDepth(9998).setScrollFactor(0);
       this.add.text(480, 240, 'you fell', { fontSize: 42, color: '#e05252' })
         .setOrigin(.5).setDepth(9999).setScrollFactor(0);
-      this.add.text(480, 292, `treasure recovered: ${this.treasure}`, { fontSize: 20, color: '#ffd35a' })
+      this.add.text(480, 292,
+        `carried treasure lost: ${this.carried} — banked at home: ${this.banked}`,
+        { fontSize: 18, color: '#ffd35a' })
         .setOrigin(.5).setDepth(9999).setScrollFactor(0);
       this.add.text(480, 322, 'press ENTER to rally the line again', { fontSize: 16, color: '#ccc' })
         .setOrigin(.5).setDepth(9999).setScrollFactor(0);
@@ -391,6 +424,9 @@ export class BattleScene extends Phaser.Scene {
     if (this.engaged && near === 0) {
       this.engaged = false;
       this.combatPeak = 0;
+      this.clearedT = 30;              // ~30s of quiet after clearing an area
+      this.clearedX = this.player.x;
+      this.toast('area clear — it should stay quiet for a bit');
     }
     const squad = [this.player, ...this.allies].filter(u => u.alive);
     const avgHealth = squad.length
@@ -440,13 +476,18 @@ export class BattleScene extends Phaser.Scene {
     const readied = this.allies.some(a => a.alive && a.readied) ? ' · READIED' : '';
     const reloading = this.allies.some(a => a.alive && !a.loaded && a.reloadT > 0) ? ' · reloading…' : '';
     const empty = this.allies.some(a => a.alive && !a.loaded && a.reloadT <= 0 && a.mode !== 'free') ? ' · muskets empty (Q)' : '';
-    this.hudLeft.setText(`${arm}\nallies: ${mode}${readied}${reloading}${empty}\ntreasure: ${this.treasure}`);
+    const carry = this.carried ? ` (+${this.carried} carried)` : '';
+    this.hudLeft.setText(`${arm}\nallies: ${mode}${readied}${reloading}${empty}\ntreasure: ${this.banked}${carry}`);
 
     const danger = dangerAt(p.x);
     const near = this.enemies.filter(e => e.alive).length;
     const zone = p.x < 520 ? 'village — safe'
       : `danger ${(danger * 100).toFixed(0)}%`;
-    this.hudRight.setText(`${zone}\n${near ? `enemies: ${near}` : 'go east for treasure →'}`);
+    const status = near ? `enemies: ${near}`
+      : this.clearedT > 0 && Math.abs(p.x - this.clearedX) < 450
+        ? `area clear (${Math.ceil(this.clearedT)}s)`
+        : 'go east for treasure →';
+    this.hudRight.setText(`${zone}\n${status}`);
   }
 
   drawBars() {
@@ -475,28 +516,42 @@ export class BattleScene extends Phaser.Scene {
   makeTextures() {
     if (this.textures.exists('soldier_blue_rifle')) return; // scene restart
 
-    const soldier = (key, coat, trim, weapon) => {
+    // Two views per soldier: 'side' (face visible) and 'up' (walking away
+    // from the camera — you see HAIR under the hat, and whatever is slung
+    // on the back). When the sword is drawn, the rifle shows on the back.
+    const soldier = (key, coat, trim, weapon, view) => {
       const g = this.make.graphics({ add: false });
+      const up = view === 'up';
       g.fillStyle(0x2a2118); g.fillRect(4, 0, 8, 3);        // hat
-      g.fillStyle(0xd9a066); g.fillRect(5, 3, 6, 4);        // face
+      if (up) { g.fillStyle(0x4a3320); g.fillRect(5, 3, 6, 4); }  // hair (back of head)
+      else { g.fillStyle(0xd9a066); g.fillRect(5, 3, 6, 4); }     // face
       g.fillStyle(coat); g.fillRect(3, 7, 10, 10);          // coat
       g.fillStyle(trim); g.fillRect(3, 7, 10, 2);           // shoulder trim
       g.fillStyle(0x1d1d24); g.fillRect(4, 17, 3, 5); g.fillRect(9, 17, 3, 5); // legs
       if (weapon === 'rifle') {
-        g.fillStyle(0x555); g.fillRect(12, 8, 6, 2);        // rifle held level
+        if (up) { g.fillStyle(0x555); g.fillRect(12, 1, 2, 9); }  // barrel over the shoulder
+        else { g.fillStyle(0x555); g.fillRect(12, 8, 6, 2); }     // rifle held level
       } else if (weapon === 'sword') {
-        g.fillStyle(0xc9d4e0); g.fillRect(13, 1, 2, 9);     // blade up
-        g.fillStyle(0x8a6d3b); g.fillRect(12, 10, 4, 2);    // guard
-      } else if (weapon === 'stowed') {
-        g.fillStyle(0x555); g.fillRect(1, 4, 2, 10);        // rifle on the back
+        if (up) {
+          g.fillStyle(0x555); g.fillRect(7, 8, 2, 9);       // rifle slung across the back
+          g.fillStyle(0xc9d4e0); g.fillRect(13, 1, 2, 8);   // blade up
+        } else {
+          g.fillStyle(0x555); g.fillRect(1, 5, 2, 10);      // rifle on the back
+          g.fillStyle(0xc9d4e0); g.fillRect(13, 1, 2, 9);   // blade up
+          g.fillStyle(0x8a6d3b); g.fillRect(12, 10, 4, 2);  // guard
+        }
       }
       g.generateTexture(key, 18, 22);
       g.destroy();
     };
-    soldier('soldier_blue_rifle', 0x2e5ea8, 0x9fc4ff, 'rifle');
-    soldier('soldier_blue_sword', 0x2e5ea8, 0x9fc4ff, 'sword');
-    soldier('soldier_green', 0x2f7a4d, 0xa8e6bd, 'rifle');
-    soldier('soldier_red', 0x9c2f2f, 0xe0a0a0, 'sword');
+    soldier('soldier_blue_rifle', 0x2e5ea8, 0x9fc4ff, 'rifle', 'side');
+    soldier('soldier_blue_rifle_up', 0x2e5ea8, 0x9fc4ff, 'rifle', 'up');
+    soldier('soldier_blue_sword', 0x2e5ea8, 0x9fc4ff, 'sword', 'side');
+    soldier('soldier_blue_sword_up', 0x2e5ea8, 0x9fc4ff, 'sword', 'up');
+    soldier('soldier_green', 0x2f7a4d, 0xa8e6bd, 'rifle', 'side');
+    soldier('soldier_green_up', 0x2f7a4d, 0xa8e6bd, 'rifle', 'up');
+    soldier('soldier_red', 0x9c2f2f, 0xe0a0a0, 'sword', 'side');
+    soldier('soldier_red_up', 0x9c2f2f, 0xe0a0a0, 'sword', 'up');
 
     let g = this.make.graphics({ add: false });
     g.fillStyle(0x000000); g.fillEllipse(10, 4, 20, 8);
