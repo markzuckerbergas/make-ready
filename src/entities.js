@@ -174,7 +174,7 @@ export class Player extends Unit {
     if (this.weapon === 'rifle') {
       if (!this.loaded) { this.scene.toast(this.reloadT > 0 ? 'reloading…' : 'click! — R to reload'); return; }
       this.loaded = false;
-      this.scene.shoot(this, pointerAngle, 2.5, 55);
+      this.scene.shoot(this, pointerAngle, 2.5, 999); // one shot, one kill (for now)
     } else {
       this.swing();
     }

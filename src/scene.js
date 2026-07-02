@@ -632,15 +632,58 @@ export class BattleScene extends Phaser.Scene {
 
     const house = (key, w, h, wall, roof) => {
       const gr = this.make.graphics({ add: false });
+      gr.fillStyle(0x4a3a2a); gr.fillRect(w * .66, h * .06, w * .1, h * .34);  // chimney
       gr.fillStyle(wall); gr.fillRect(0, h * .4, w, h * .6);
       gr.fillStyle(roof); gr.fillTriangle(w / 2, 0, -2, h * .45, w + 2, h * .45);
+      gr.fillStyle(0x3d3226); gr.fillRect(0, h * .4, w, 2);                    // eave line
       gr.fillStyle(0x2a2118); gr.fillRect(w * .42, h * .65, w * .16, h * .35); // door
+      gr.fillStyle(0x8a6d3b); gr.fillRect(w * .42, h * .63, w * .16, 2);       // lintel
       gr.fillStyle(0xffd35a); gr.fillRect(w * .15, h * .55, w * .14, w * .14); // lit window
+      gr.fillStyle(0xffd35a); gr.fillRect(w * .72, h * .55, w * .14, w * .14); // second window
       gr.generateTexture(key, w + 4, h);
       gr.destroy();
     };
     house('house_big', 64, 54, 0x6d5a43, 0x8a3d2e);
     house('house_small', 44, 40, 0x60503c, 0x7a4a33);
+    house('house_stone', 54, 46, 0x7a7568, 0x5a6a70);
+
+    // barn: wide body, tall roof, big double door
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x7a3d2c); g.fillRect(0, 24, 86, 40);
+    g.fillStyle(0x8f4834); g.fillTriangle(43, 0, -3, 26, 89, 26);
+    g.fillStyle(0x4a2418); g.fillRect(31, 34, 24, 30);          // double door
+    g.fillStyle(0xd9c9a0); g.fillRect(42, 34, 2, 30);           // door split
+    g.fillStyle(0xd9c9a0); g.fillRect(6, 30, 10, 10);           // hayloft window
+    g.generateTexture('barn', 90, 64); g.destroy();
+
+    // well: stone ring, two posts, little roof
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x8a3d2e); g.fillTriangle(13, 0, 0, 9, 26, 9);
+    g.fillStyle(0x5a4632); g.fillRect(3, 7, 3, 14); g.fillRect(20, 7, 3, 14);
+    g.fillStyle(0x6b6f78); g.fillEllipse(13, 22, 24, 10);
+    g.fillStyle(0x23262e); g.fillEllipse(13, 21, 14, 5);
+    g.generateTexture('well', 26, 28); g.destroy();
+
+    // market stall: striped canopy over a counter
+    g = this.make.graphics({ add: false });
+    for (let i = 0; i < 6; i++) { g.fillStyle(i % 2 ? 0xe8e3d0 : 0xc94f4f); g.fillRect(i * 6, 0, 6, 7); }
+    g.fillStyle(0x5a4632); g.fillRect(2, 7, 3, 16); g.fillRect(31, 7, 3, 16);
+    g.fillStyle(0x6d5230); g.fillRect(0, 16, 36, 7);
+    g.fillStyle(0x9fdcb2); g.fillRect(5, 12, 6, 4);  // wares
+    g.fillStyle(0xffd35a); g.fillRect(24, 12, 6, 4);
+    g.generateTexture('stall', 36, 24); g.destroy();
+
+    // haystack
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0xc9a04a); g.fillEllipse(13, 12, 26, 14);
+    g.fillStyle(0xdbb765); g.fillEllipse(11, 8, 16, 9);
+    g.generateTexture('haystack', 26, 19); g.destroy();
+
+    // lamp post
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x3a332a); g.fillRect(3, 4, 3, 24);
+    g.fillStyle(0xffe9a0); g.fillRect(1, 0, 7, 6);
+    g.generateTexture('lamp', 9, 28); g.destroy();
   }
 
   // Render a real gradient into a canvas texture once, then stretch it —
@@ -706,20 +749,68 @@ export class BattleScene extends Phaser.Scene {
   }
 
   buildVillage() {
-    const spots = [
-      [90, 260, 'house_big'], [230, 225, 'house_small'], [150, 350, 'house_small'],
-      [320, 300, 'house_big'], [70, 450, 'house_small'],
-    ];
-    for (const [x, y, key] of spots) {
-      const ds = dscale(clamp(y, PLAY.top, PLAY.bottom));
-      this.add.image(x, y - 20 * ds, key).setScale(ds * 1.3).setDepth(y);
+    this.obstacles = [];
+
+    // worn dirt path winding from the houses out to the palisade gate
+    const path = this.add.graphics().setDepth(-98);
+    path.fillStyle(0x5a4c36, .45);
+    for (let x = 50; x < SAFE_EDGE + 40; x += 24) {
+      path.fillEllipse(x, 430 + Math.sin(x / 85) * 22, 38, 13);
     }
-    // campfire
-    const fx = 250, fy = 420;
+
+    // fences along the village bounds (each row depth-sorted at its own y)
+    for (const fy of [208, 508]) {
+      const fence = this.add.graphics().setDepth(fy);
+      fence.fillStyle(0x5a4632);
+      for (let fx = 44; fx < SAFE_EDGE - 90; fx += 22) fence.fillRect(fx, fy - 10, 3, 12);
+      fence.fillRect(44, fy - 7, SAFE_EDGE - 134, 2);
+    }
+
+    // buildings & props: [x, y, texture, solid radius, lift]
+    const props = [
+      [140, 262, 'house_big', 40, 20],
+      [305, 232, 'house_small', 30, 16],
+      [455, 272, 'house_stone', 34, 18],
+      [82, 345, 'house_small', 30, 16],
+      [548, 246, 'barn', 52, 24],
+      [238, 342, 'well', 13, 8],
+      [352, 470, 'stall', 18, 8],
+      [500, 500, 'haystack', 13, 5],
+      [590, 452, 'haystack', 13, 5],
+      [186, 412, 'lamp', 0, 12],
+      [432, 442, 'lamp', 0, 12],
+    ];
+    for (const [x, y, key, r, lift] of props) {
+      const ds = dscale(clamp(y, PLAY.top, PLAY.bottom));
+      this.add.image(x, y - lift * ds, key).setScale(ds * 1.3).setDepth(y);
+      this.add.image(x, y, 'shadow').setScale(ds * (r ? r / 9 : 1)).setAlpha(.22).setDepth(y - .1);
+      if (r) this.obstacles.push({ x, y, r: r * ds, blockH: 44 * ds });
+      if (key === 'lamp') {
+        this.add.circle(x, y - 24 * ds, 24, 0xffd35a, .1).setDepth(y + .1);
+      }
+    }
+
+    // campfire on the green
+    const fx = 262, fy = 424;
     const fire = this.add.circle(fx, fy - 6, 6, 0xff9a3d).setDepth(fy);
     this.add.circle(fx, fy, 9, 0x3a2a18).setDepth(fy - .2);
+    this.add.circle(fx, fy - 6, 30, 0xff9a3d, .08).setDepth(fy + .1);
     this.tweens.add({ targets: fire, scale: { from: .8, to: 1.25 }, alpha: { from: .8, to: 1 }, yoyo: true, repeat: -1, duration: 260 });
-    this.add.text(200, 190, 'HOMESTEAD — safe ground', { fontSize: 12, color: '#9fdcb2' })
+
+    // chimney smoke drifting from the houses
+    const chimneys = [[158, 208], [317, 190], [469, 222], [94, 305]];
+    this.time.addEvent({
+      delay: 700, loop: true, callback: () => {
+        const [cx, cy] = chimneys[Math.floor(Math.random() * chimneys.length)];
+        const puff = this.add.circle(cx + Math.random() * 4, cy, 3, 0xd8d3c8, .3).setDepth(500);
+        this.tweens.add({
+          targets: puff, y: cy - 26 - Math.random() * 10, x: cx + 8 + Math.random() * 8,
+          alpha: 0, scale: 2.4, duration: 2600, onComplete: () => puff.destroy(),
+        });
+      },
+    });
+
+    this.add.text(230, 190, 'HOMESTEAD — safe ground', { fontSize: 12, color: '#9fdcb2' })
       .setOrigin(.5).setDepth(200);
     // palisade marking the safe edge
     const pal = this.add.graphics().setDepth(PLAY.bottom + 1);
@@ -733,7 +824,7 @@ export class BattleScene extends Phaser.Scene {
   placeScenery() {
     // Trees and rocks are SOLID: units can't walk through them and their
     // body stops bullets — cover works for you and against you.
-    this.obstacles = [];
+    this.obstacles ??= [];
     for (let i = 0; i < 46; i++) {
       const x = 500 + Math.random() * (WORLD_W - 560);
       const y = PLAY.top + Math.random() * (PLAY.bottom - PLAY.top);
