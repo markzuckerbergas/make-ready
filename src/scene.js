@@ -643,17 +643,29 @@ export class BattleScene extends Phaser.Scene {
     house('house_small', 44, 40, 0x60503c, 0x7a4a33);
   }
 
+  // Render a real gradient into a canvas texture once, then stretch it —
+  // perfectly smooth, one draw call, works on WebGL and Canvas alike.
+  gradTexture(key, w, h, stops, horizontal = false) {
+    if (this.textures.exists(key)) return key;
+    const tex = this.textures.createCanvas(key, w, h);
+    const c = tex.getContext();
+    const g = c.createLinearGradient(0, 0, horizontal ? w : 0, horizontal ? 0 : h);
+    for (const [pos, col] of stops) g.addColorStop(pos, col);
+    c.fillStyle = g;
+    c.fillRect(0, 0, w, h);
+    tex.refresh();
+    return key;
+  }
+
   drawBackground() {
-    // layer 1: sky — fixed to the camera; three stacked versions (day, dusk,
+    // layer 1: sky — fixed to the camera; three smooth gradients (day, dusk,
     // night) whose alphas crossfade with how far east the player stands
-    const skyBands = (cols, depth) => {
-      const g = this.add.graphics().setDepth(depth).setScrollFactor(0);
-      cols.forEach((c, i) => { g.fillStyle(c); g.fillRect(0, i * 30, 960, 30); });
-      return g;
-    };
-    this.skyDay = skyBands([0x6fb7d9, 0x8ac6e2, 0xa9d6ea, 0xd3d3b8, 0xe8c187], -122);
-    this.skyDusk = skyBands([0x1b2340, 0x252f4e, 0x374260, 0x54506b, 0x8a5f5a], -121);
-    this.skyNight = skyBands([0x04060d, 0x080b16, 0x0d1120, 0x12172a, 0x1d2236], -120);
+    const sky = (key, stops, depth) =>
+      this.add.image(0, 0, this.gradTexture(key, 32, 150, stops))
+        .setOrigin(0, 0).setDisplaySize(960, 150).setDepth(depth).setScrollFactor(0);
+    this.skyDay = sky('skyDay', [[0, '#6fb7d9'], [.45, '#a9d6ea'], [.8, '#d3d3b8'], [1, '#e8c187']], -122);
+    this.skyDusk = sky('skyDusk', [[0, '#1b2340'], [.45, '#374260'], [.8, '#54506b'], [1, '#8a5f5a']], -121);
+    this.skyNight = sky('skyNight', [[0, '#04060d'], [.5, '#0d1120'], [1, '#1d2236']], -120);
     this.skyDusk.setAlpha(0);
     this.skyNight.setAlpha(0);
 
@@ -667,29 +679,22 @@ export class BattleScene extends Phaser.Scene {
     }
     mts.fillStyle(0xc98a5a, .5).fillRect(0, 146, mtsW, 4);
 
-    // layer 3: ground — scrolls 1:1, bands get darker + taller toward camera
-    const g = this.add.graphics().setDepth(-100);
-    const groundCols = [0x51603f, 0x4a5939, 0x445234, 0x3d4a2f, 0x37432a, 0x313c26, 0x2b3521, 0x252e1d];
-    let y = 150;
-    groundCols.forEach((c, i) => {
-      const h = 18 + i * 14;
-      g.fillStyle(c); g.fillRect(0, y, WORLD_W, h);
-      y += h;
-    });
-    g.fillStyle(0x20281a); g.fillRect(0, y, WORLD_W, 560 - y);
-    // village ground is warmer, worn earth
-    g.fillStyle(0x4a4030, .55); g.fillRect(0, 150, SAFE_EDGE - 90, 410);
+    // layer 3: ground — one smooth vertical gradient, light at the horizon
+    // to dark at the near edge (the depth cue the old bands approximated)
+    this.add.image(0, 150, this.gradTexture('groundGrad', 32, 410,
+      [[0, '#55654a'], [.35, '#43512f'], [.7, '#313c26'], [1, '#1f2718']]))
+      .setOrigin(0, 0).setDisplaySize(WORLD_W, 410).setDepth(-100);
 
-    // night falls toward the east: strips of deepening dark laid over the
-    // world (above entities, below HUD) — day at the village, night out deep
-    const nightG = this.add.graphics().setDepth(8000);
-    const STRIPS = 26, x0 = 800;
-    for (let i = 0; i < STRIPS; i++) {
-      const sx = x0 + (i / STRIPS) * (WORLD_W - x0);
-      const alpha = .5 * Math.pow((i + 1) / STRIPS, 1.4);
-      nightG.fillStyle(0x0a0c1e, alpha);
-      nightG.fillRect(sx, PLAY.horizon, (WORLD_W - x0) / STRIPS + 1, 560 - PLAY.horizon);
-    }
+    // village ground: warm worn earth, fading out toward the palisade
+    this.add.image(0, 150, this.gradTexture('villageGrad', 256, 32,
+      [[0, 'rgba(74,64,48,.55)'], [.7, 'rgba(74,64,48,.45)'], [1, 'rgba(74,64,48,0)']], true))
+      .setOrigin(0, 0).setDisplaySize(SAFE_EDGE - 40, 410).setDepth(-99);
+
+    // night falls toward the east: one smooth horizontal veil over the world
+    // (above entities, below HUD) — day at the village, night out deep
+    this.add.image(800, PLAY.horizon, this.gradTexture('nightGrad', 512, 32,
+      [[0, 'rgba(10,12,30,0)'], [.5, 'rgba(10,12,30,.16)'], [1, 'rgba(10,12,30,.5)']], true))
+      .setOrigin(0, 0).setDisplaySize(WORLD_W - 800, 560 - PLAY.horizon).setDepth(8000);
   }
 
   // crossfade the fixed sky with how far east the player stands
