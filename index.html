@@ -1,0 +1,37 @@
+<!doctype html>
+<!--
+  make-ready — musket-line action game with an adaptive Strudel soundtrack
+  Copyright (C) 2026 markzuckerbergas
+
+  This program is free software: you can redistribute it and/or modify it
+  under the terms of the GNU Affero General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or (at
+  your option) any later version. See https://www.gnu.org/licenses/agpl-3.0
+  and the LICENSE file. Source: https://github.com/markzuckerbergas/make-ready
+
+  Built with Strudel (https://strudel.cc, AGPL-3.0) and Phaser (MIT).
+-->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>make ready — FIRE!</title>
+  <style>
+    body { margin: 0; background: #0e0f13; color: #eee; font-family: system-ui, sans-serif;
+           display: flex; flex-direction: column; align-items: center; gap: .4rem; }
+    #app { margin-top: .6rem; }
+    #footer { font-size: .8rem; color: #888; }
+    #footer a { color: #aaa; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <p id="footer">
+    music engine: <a href="https://strudel.cc">Strudel</a> ·
+    game engine: <a href="https://phaser.io">Phaser</a> ·
+    <a href="https://github.com/markzuckerbergas/make-ready">source code</a> ·
+    <a href="https://www.gnu.org/licenses/agpl-3.0.en.html">AGPL-3.0</a>
+  </p>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
