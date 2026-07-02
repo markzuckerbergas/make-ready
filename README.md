@@ -37,7 +37,7 @@ Commands to your two allies — formations are **relative to your facing**
 | **E** | FIRE! | volley — **readied volleys get bonus accuracy & damage** |
 | **1** | FORM LINE | firing line abreast of you — only holds while you stand still |
 | **2** | BEHIND ME | (default) they cover from your back |
-| **3** | FIRE AT WILL | fast but the wildest aim in the game; self-reloading |
+| **3** | FIRE AT WILL | hold current position and keep shooting; wildest aim, self-reloading |
 | **4** | CHARGE | swords out, run the enemy down |
 
 The drill is real: after a volley the muskets stay **empty** until you order

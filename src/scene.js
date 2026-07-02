@@ -162,7 +162,7 @@ export class BattleScene extends Phaser.Scene {
   // so when the player spins around, allies swap slots instead of crossing
   // each other's path diagonally.
   assignFormationSlots() {
-    const alive = this.allies.filter(a => a.alive && (a.mode === 'line' || a.mode === 'behind' || a.mode === 'free'));
+    const alive = this.allies.filter(a => a.alive && (a.mode === 'line' || a.mode === 'behind'));
     if (!alive.length) return;
     const p = this.player;
     const fx = p.faceX, fy = p.faceY;
