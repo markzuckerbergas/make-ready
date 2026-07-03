@@ -40,6 +40,7 @@ let paused = false;
 function pauseGame() {
   if (paused || !window.__mrStarted) return;
   paused = true;
+  window.__mrPaused = true;
   music.pause();
   const sc = scene(); if (sc) sc.userPaused = true;
   pauseOverlay.hidden = false;
@@ -47,6 +48,7 @@ function pauseGame() {
 function resumeGame() {
   if (!paused) return;
   paused = false;
+  window.__mrPaused = false;
   music.resume();
   const sc = scene(); if (sc) sc.userPaused = false;
   pauseOverlay.hidden = true;

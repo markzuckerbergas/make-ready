@@ -2,10 +2,12 @@
 
 The three composed songs of the soundtrack, as playable `.strudel` files
 (open them at <https://strudel.cc> or in the Strudel VS Code extension).
-These are the composition sources — the game plays JavaScript ports
-(village & field: the `-simple` versions; battle: the full composition) in
-[`src/music.js`](../src/music.js), which adds the zone-crossfade and
-per-song playhead logic.
+These are the composition sources — the game plays JavaScript ports of the
+FULL songs in [`src/music.js`](../src/music.js) (the `-simple` versions are
+kept for reference). Transitions are not crossfades: short COMPOSED BRIDGES
+carry the harmony from one song into the next (e.g. the bass walks down
+C→B♭→A♭→G to C minor's dominant to reach battle's F minor, and climbs back
+i→v to come home), then the destination song resumes where it left off.
 
 | Song | Zone | Length |
 |------|------|--------|

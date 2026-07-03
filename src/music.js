@@ -1,42 +1,53 @@
 import { initStrudel } from '@strudel/web';
 
 // ---------------------------------------------------------------------------
-// MusicDirector v3 — village & field play their SIMPLE versions; battle
-// plays the FULL composition (see ../music/).
+// MusicDirector v4 — the FULL compositions, joined by COMPOSED BRIDGES.
 //
-// Transition intelligence:
-//  * zone changes COMMIT only on the shared 4-cycle grid — and because every
-//    village/field section is built from the same 4-cycle Cm->Ab loop, any
-//    grid-aligned crossfade has BOTH songs on the same chord at the same time
-//  * village & field keep a playhead: first entry starts at 0, returning
-//    resumes where it left off (snapped to the same 4-cycle grid)
-//  * battle always enters at its alarm — that section IS the transition
-//  * battle entries commit on a 1-cycle grid (combat can't wait 10 s)
-//  * crossfade faders are postgain signals: in ~2.5s, out ~4s, beat-locked
+// No crossfades. The timeline is cut into exact segments on the cycle grid:
 //
-// Tab hidden -> the game pauses and so does the music: we SUSPEND the
-// AudioContext. Its currentTime freezes, which freezes Strudel's scheduler
-// with it — no background scheduling, no crackle. Our playhead clock is
-// shifted by the paused duration on resume, so everything stays in sync.
+//   [ song A ... )[ bridge A->B )[ ... song B resumes where it left off ]
+//                 t0             t1
+//
+// Every layer is gated by signal(t => ...) — t is pattern time, so the cuts
+// are exact, not eased. The bridges are short composed passages that carry
+// the harmony from one song into the other:
+//   village->field  the left hand picks up its feet (quarters -> 8ths)
+//   field->village  the walk settles back down
+//   ->battle        the bass walks down C->Bb->Ab->G to Cm's dominant, which
+//                   pulls into battle's F minor as the snare call closes in
+//   battle->calm    the bass climbs home F->G->Ab->Bb->C, drums hand over
+//   ->boss / boss-> rumble, rolls, tritone growl
+//
+// Playheads: village & field resume (snapped to the 4-cycle phrase grid);
+// battle & boss always enter from the top — their openings are the ramp.
+//
+// The playhead clock is the AudioContext clock itself (the same clock the
+// scheduler runs on), so pause/suspend can never desync it and there is no
+// drift between clock domains.
 // ---------------------------------------------------------------------------
 
 const CPS = .5;            // @strudel/web scheduler default (120 BPM @ 4/cycle)
 const SLOW = 1.25;         // slows the whole stack to 96 BPM
 const RATE = CPS / SLOW;   // song-cycles per second (one cycle = 2.5 s)
-const LEN = { village: 16, field: 16, battle: 56, boss: 16 };
+const LEN = { village: 52, field: 40, battle: 56, boss: 16 };
+const MASTER = { village: 1, field: .85, battle: 1.1, boss: .6 };
+const SONGS = ['village', 'field', 'battle', 'boss'];
+const urgent = z => z === 'battle' || z === 'boss';
 
 class MusicDirector {
   constructor() {
-    this.w = { village: 1, field: 0, battle: 0, boss: 0 }; // crossfade weights
-    this.zone = 'village';
-    this.pending = null;
-    this.commitAt = null;
-    this.off = { village: 0, field: null, battle: null, boss: null }; // playhead offsets
-    this.pos = { village: 0, field: 0, battle: 0, boss: 0 }; // parked playheads
-    this.startedAt = null;
+    this.cur = 'village';
+    this.trans = null;   // { from, to, t0, end } while a bridge is scheduled
+    this.off = { village: 0, field: null, battle: null, boss: null };
+    this.pos = { village: 0, field: 0, battle: 0, boss: 0 };
+    this.ctxAnchor = null;  // AudioContext time at play start — SAME clock as
+                            // the scheduler, so playhead math can never drift
+    this.paused = false;
     this.started = false;
-    this.userVol = .6;   // page slider; default keeps overall level modest
-    this.pausedAt = null; // tab hidden
+    this.lastWant = 'village';
+    this.wantSince = 0;
+    this.nextTransOk = 0;
+    this.userVol = .6;
     this.defeated = false;
     this._lvl = 0;
     this.ready = Promise.resolve(initStrudel({
@@ -54,24 +65,24 @@ class MusicDirector {
     if (this.started) return;
     this.started = true;
     await this.ready;
-    this.startedAt = performance.now();
+    const ctx = globalThis.getAudioContext?.();
+    this.ctxAnchor = ctx ? ctx.currentTime : 0;
     this.rebuild();
+    if (this.paused) ctx?.suspend(); // pause was requested during the load
     this.startMeter();
   }
 
-  // A true pause: suspending the AudioContext freezes its clock, and
-  // Strudel's scheduler with it. Our playhead clock shifts by the paused
-  // duration on resume so everything stays aligned.
+  // Suspending the AudioContext freezes ITS clock — which is also our
+  // playhead clock — so pause needs no bookkeeping and cannot desync.
   pause() {
-    if (!this.started || this.pausedAt !== null) return;
-    this.pausedAt = performance.now();
+    if (this.paused) return;
+    this.paused = true;
     globalThis.getAudioContext?.()?.suspend();
   }
 
   resume() {
-    if (this.pausedAt === null) return;
-    this.startedAt += performance.now() - this.pausedAt;
-    this.pausedAt = null;
+    if (!this.paused) return;
+    this.paused = false;
     globalThis.getAudioContext?.()?.resume();
   }
 
@@ -79,73 +90,74 @@ class MusicDirector {
   setVolume(v) { this.userVol = v; }
 
   nowCycles() {
-    return this.startedAt === null ? 0
-      : ((performance.now() - this.startedAt) / 1000) * RATE;
+    if (this.ctxAnchor === null) return 0;
+    const ctx = globalThis.getAudioContext?.();
+    return ctx ? (ctx.currentTime - this.ctxAnchor) * RATE : 0;
   }
 
   update(dt, snap) {
-    if (!this.started || this.startedAt === null || this.pausedAt !== null) return;
+    if (!this.started || this.ctxAnchor === null || this.paused) return;
+    const now = this.nowCycles();
+
+    // a finished bridge is pure bookkeeping — the running pattern already
+    // encodes the whole timeline
+    if (this.trans && now >= this.trans.end) {
+      this.cur = this.trans.to;
+      this.trans = null;
+    }
+    if (this.trans) return; // one transition at a time
+
     const want = this.defeated ? 'village' : snap.zone;
+    if (want !== this.lastWant) { this.lastWant = want; this.wantSince = now; }
+    if (want === this.cur) return;
+    // hysteresis: a zone must PERSIST before we spend a bridge on it, and
+    // transitions get a short cooldown — no bridge ping-pong at a boundary
+    const dwell = urgent(want) ? .35 : 1.2; // in cycles (~0.9s / 3s)
+    if (now - this.wantSince < dwell || now < this.nextTransOk) return;
 
-    if (want !== this.zone) {
-      if (this.pending !== want) {
-        this.pending = want;
-        const now = this.nowCycles();
-        // any transition involving battle is urgent — next whole cycle;
-        // village<->field wait for the 4-cycle grid so harmony lines up
-        const urgent = z => z === 'battle' || z === 'boss';
-        const grid = (urgent(want) || urgent(this.zone)) ? 1 : 4;
-        this.commitAt = Math.ceil(now / grid) * grid;
-      }
-      if (this.nowCycles() >= this.commitAt - .02) this.commit(want);
-    } else {
-      this.pending = null;
-      this.commitAt = null;
-    }
+    // schedule: cut on the OUTGOING SONG'S phrase grid (its local frame —
+    // global time only aligns with its phrases while off[cur] % 4 == 0),
+    // play the bridge, then the new song
+    const grid = (urgent(want) || urgent(this.cur)) ? 1 : 4;
+    const base = this.off[this.cur] ?? 0;
+    const t0 = base + Math.ceil((now - base + .05) / grid) * grid;
+    const len = urgent(want) ? 2 : 4; // into combat fast, out of it gently
+    const t1 = t0 + len;
+    this.nextTransOk = t1 + 2;
 
-    // battle enters and leaves faster than the calm songs swap
-    const IN = { village: .4, field: .4, battle: .55, boss: .55 };
-    const OUT = { village: .3, field: .3, battle: .5, boss: .5 };
-    for (const k of ['village', 'field', 'battle', 'boss']) {
-      const target = k === this.zone ? 1 : 0;
-      const rate = target ? IN[k] : OUT[k];
-      const d = target - this.w[k];
-      const step = rate * dt;
-      this.w[k] = Math.abs(d) <= step ? target : this.w[k] + Math.sign(d) * step;
-    }
+    this.pos[this.cur] = this.off[this.cur] === null ? 0
+      : ((t0 - this.off[this.cur]) % LEN[this.cur] + LEN[this.cur]) % LEN[this.cur];
+    const p = urgent(want) ? 0
+      : (Math.floor((this.pos[want] ?? 0) / 4) * 4) % LEN[want];
+    this.off[want] = t1 - p;
+
+    this.trans = { from: this.cur, to: want, t0, end: t1 };
+    this.rebuild();
   }
 
-  commit(zone) {
-    const T = this.commitAt ?? this.nowCycles();
-    const leaving = this.zone;
-    if (this.off[leaving] !== null) {
-      this.pos[leaving] = ((T - this.off[leaving]) % LEN[leaving] + LEN[leaving]) % LEN[leaving];
-    }
-    // battle is a ramp: always from the alarm. Others resume, grid-snapped.
-    const p = (zone === 'battle' || zone === 'boss') ? 0
-      : (Math.floor((this.pos[zone] ?? 0) / 4) * 4) % LEN[zone];
-    this.off[zone] = T - p;
-    this.zone = zone;
-    this.pending = null;
-    this.commitAt = null;
-    this.rebuild(); // in-phase hot swap; the entering song is ~silent right now
-  }
-
+  // Encode the whole segment timeline into gate signals of pattern time —
+  // one rebuild per transition, and the cuts land exactly on the grid.
   rebuild() {
     const { stack, signal } = globalThis;
-    const w = this.w;
     const vol = () => this.userVol;
-    stack(
-      // per-song masters (1 / .85 / .6) folded into the faders
-      buildVillage().late(this.off.village ?? 0)
-        .postgain(signal(() => w.village * vol())),
-      buildField().late(this.off.field ?? 0)
-        .postgain(signal(() => w.field * .85 * vol())),
-      buildBattle().late(this.off.battle ?? 0)
-        .postgain(signal(() => w.battle * .6 * vol())),
-      buildBoss().late(this.off.boss ?? 0)
-        .postgain(signal(() => w.boss * .6 * vol())),
-    ).slow(SLOW).analyze(1).play();
+    const from = this.trans?.from ?? this.cur;
+    const to = this.trans?.to ?? null;
+    const t0 = this.trans?.t0 ?? Infinity;
+    const t1 = this.trans?.end ?? Infinity;
+
+    const gate = k => signal(t =>
+      ((k === from && t < t0) || (k === to && t >= t1)) ? MASTER[k] * vol() : 0);
+
+    const layers = SONGS.map(k =>
+      BUILDERS[k]().late(this.off[k] ?? 0).postgain(gate(k)));
+
+    if (this.trans) {
+      layers.push(
+        buildBridge(from, to).late(t0)
+          .postgain(signal(t => (t >= t0 && t < t1) ? vol() : 0)),
+      );
+    }
+    stack(...layers).slow(SLOW).analyze(1).play();
   }
 
   // VU meter on the page, fed by the stack's analyser
@@ -162,7 +174,7 @@ class MusicDirector {
           lvl = Math.min(1, Math.sqrt(sum / n) * 2.5);
         }
       } catch { /* analyser not ready yet */ }
-      this._lvl = Math.max(lvl, this._lvl * .92); // fast attack, slow release
+      this._lvl = Math.max(lvl, this._lvl * .92);
       fill.style.width = `${(this._lvl * 100).toFixed(1)}%`;
       requestAnimationFrame(tick);
     };
@@ -171,14 +183,118 @@ class MusicDirector {
 }
 
 // ---------------------------------------------------------------------------
-// The simple songs — JS ports of ../music/*-simple.strudel (celesta plays as
-// quiet piano an octave up: @strudel/web has no GM soundfonts).
+// The bridges — short composed passages from one song's ground to the
+// other's. Calm bridges are 4 cycles (one full Cm/Ab phrase); combat
+// entries are 2 cycles.
+// ---------------------------------------------------------------------------
+
+function buildBridge(from, to) {
+  if (to === 'battle') return bridgeToBattle();
+  if (to === 'boss') return bridgeToBoss();
+  if (from === 'battle' || from === 'boss') return bridgeStandDown();
+  return to === 'field' ? bridgeToField() : bridgeToVillage();
+}
+
+// village -> field: the left hand picks up its feet, the frame drum wakes.
+// Keeps the Cm Cm Ab Ab phrase, so it slots into the loop both songs share.
+function bridgeToField() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note(`<
+      [c3 g3 c4 g3]
+      [[c3 g3 eb3 g3]*2]
+      [ab2 eb3 ab3 eb3]
+      [[ab2 eb3 c3 eb3]*2]
+    >`).sound('piano').gain('[.6 .45 .52 .45]*2'),
+    note('<~ [~ ~ eb4 f4] [g4 ~ f4 ~] [g4 f4 [g4 bb4] ~]>')
+      .sound('piano').room(.2).gain(.55),
+    sound(`<
+      ~
+      [~ ~ framedrum:12 ~]
+      [framedrum:12 ~ framedrum:13 ~]
+      [framedrum:12 framedrum:14 [framedrum:15 framedrum:15] [framedrum:16 framedrum:16]]
+    >`).gain(.65),
+  );
+}
+
+// field -> village: the walk settles back down toward the hearth
+function bridgeToVillage() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note(`<
+      [[c3 g3 eb3 g3]*2]
+      [c3 g3 c4 g3]
+      [ab2 eb3 ab3 eb3]
+      [ab2 ~ eb3 ~]
+    >`).sound('piano').gain('[.55 .42 .48 .42]*2'),
+    note('<[g4 f4 eb4 ~] [eb4 ~ d4 ~] [c4 ~ ~ ~] [~ ~ [d4 eb4] ~]>')
+      .sound('piano').room(.25).gain(.5),
+    sound('<[framedrum:12 ~ framedrum:13 ~] [framedrum:12 ~ ~ ~] [~ ~ framedrum:11 ~] ~>')
+      .gain(.55),
+  );
+}
+
+// (anything calm) -> battle: 2 cycles — the bass walks down C->Bb->Ab->G to
+// C (the dominant of F minor) while the snare call closes in.
+function bridgeToBattle() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('<[c2 c2 bb1 bb1] [ab1 ab1 g1 [g1 c2]]>')
+      .sound('sawtooth').lpf(500).gain(.5),
+    note('<[eb4 ~ d4 ~] [c4 ~ b3 c4]>')
+      .sound('piano').room(.2).gain(.6),
+    sound(`<
+      [~ ~ [snare_low:17*4] ~]
+      [[snare_low:18*8] snare_low:19 [snare_low:18*4] [snare_low:19 snare_low:19]]
+    >`).gain(.8),
+    sound('<~ [bassdrum1:6 ~ bassdrum1:7 ~]>').gain(1),
+    sound('<~ timpani_roll:4>').gain(.5),
+  );
+}
+
+// battle/boss -> calm: 4 cycles — the bass climbs home F->G->Ab->Bb->C,
+// the war machine hands over to the frame drum, the call recedes.
+function bridgeStandDown() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('<[f1 ~ f1 ~] [g1 ~ ab1 ~] [bb1 ~ bb1 ~] [c2 ~ [g1 c2] ~]>')
+      .sound('sawtooth').lpf(450).gain(.45),
+    note('<[ab3 g3 ~ eb3] [f3 ~ eb3 ~] [eb4 ~ d4 ~] [c4 ~ [d4 eb4] ~]>')
+      .sound('piano').room(.25).gain(.55),
+    sound(`<
+      [bassdrum1:6 ~ ~ ~]
+      [framedrum:12 ~ ~ ~]
+      [framedrum:12 ~ [~ framedrum:14] ~]
+      [framedrum:12 ~ ~ ~]
+    >`).gain(.7),
+    sound('<[snare_low:17 ~ [snare_low:16 snare_low:17] ~] [~ ~ snare_low:15 ~] [~ snare_low:13 ~ ~] ~>')
+      .gain(.5),
+  );
+}
+
+// -> boss: 2 cycles of rumble and roll into the tritone
+function bridgeToBoss() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('<[f1 f1 f1 f1] [gb1 gb1 f1 f1]>').sound('sawtooth').lpf(300).gain(.5),
+    sound('<[~ ~ bassdrum1:7 ~] [bassdrum1:7 ~ bassdrum1:7 bassdrum1:7]>').gain(1.3),
+    sound('<timpani_roll:5 timpani_roll:2>').gain(.6),
+    sound('<~ sus_cymbal>').gain(.35),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The FULL songs (JS ports of ../music/*.strudel; celesta layers play as
+// quiet piano an octave up — @strudel/web has no GM soundfonts).
 // ---------------------------------------------------------------------------
 
 function buildVillage() {
   const { note, stack, arrange } = globalThis;
+
   const lhA = note('<[c3 g3 c4 g3]*2 [ab2 eb3 ab3 eb3]*2>/2')
     .sound('piano').room(.1).gain(.55);
+  const rhIntro = note('<[eb4 d4 bb3 g3] [c4 bb3 ab3 eb3]>/2')
+    .sound('piano').room(.25).gain(.5);
   const rhTheme = note(`<
     [[eb4 d4 bb3 g3]!3 [g4 f4 d4 bb3]]
     [[c4 bb3 ab3 eb3]!3 [eb4 d4 c4 g3]]
@@ -187,14 +303,28 @@ function buildVillage() {
     [[eb5 d5 bb4 g4]!3 [g5 f5 d5 bb4]]
     [[c5 bb4 ab4 eb4]!3 [eb5 d5 c5 g4]]
   >/2`).sound('piano').room(.45).gain(.15);
+  const counter = note('<[g3 ~ f3 eb3] [eb3 ~ d3 c3]>/2')
+    .sound('piano').room(.25).gain(.32);
+  const lhB = note('<[f2 c3 f3 c3] [bb2 f3 bb3 f3] [eb3 bb3 eb4 bb3] [g2 d3 g3 b3]>')
+    .sound('piano').room(.15).gain(.55);
+  const rhB = note('<[f4 g4 ab4 c5] [d5 c5 bb4 f4] [eb5 bb4 g4 bb4] [d5 b4 g4 ~]>')
+    .sound('piano').room(.2).gain('[.7 .52 .6 .52]');
+  const sparkleB = note('<[c5 ~ ~ ~] [f5 ~ ~ ~] [g5 ~ ~ ~] [d5 ~ b4 ~]>')
+    .sound('piano').room(.45).gain(.12);
+
   return arrange(
+    [8, stack(lhA, rhIntro)],
     [8, stack(lhA, rhTheme)],
     [8, stack(lhA, rhTheme, sparkle)],
+    [8, stack(lhB, rhB, sparkleB)],
+    [12, stack(lhA, rhTheme, sparkle, counter)],
+    [8, stack(lhA.gain(.5), rhIntro.gain(.45), sparkle.gain(.08))],
   );
 }
 
 function buildField() {
   const { note, sound, stack, arrange } = globalThis;
+
   const lhDrive = note('<[c3 g3 eb3 g3]*4 [ab2 eb3 c3 eb3]*4>/2')
     .sound('piano').gain('[.6 .42 .5 .42]*8');
   const rhHalf = note('<[eb4 d4 bb3 g3] [c4 bb3 ab3 eb3]>/2')
@@ -203,6 +333,19 @@ function buildField() {
     [[eb4 d4 bb3 g3]!2 [eb4 [d4 eb4] f4 g4] [bb4 g4 f4 d4]]
     [[c4 bb3 ab3 eb3]!2 [c4 [bb3 c4] d4 eb4] [g4 eb4 d4 bb3]]
   >/2`).sound('piano').room(.12).gain('[.72 .5 .6 .52]*4');
+  const sparkle = note(`<
+    [[eb5 d5 bb4 g4]!2 [eb5 [d5 eb5] f5 g5] [bb5 g5 f5 d5]]
+    [[c5 bb4 ab4 eb4]!2 [c5 [bb4 c5] d5 eb5] [g5 eb5 d5 bb4]]
+  >/2`).sound('piano').room(.45).gain(.13);
+  const lhUnknown = note('<[ab2 eb3 ab3 c4]*2 [bb2 f3 ab3 db4]*2>/2')
+    .sound('piano').room(.25).gain(.5);
+  const rhUnknown = note('<[c5 ~ bb4 ~] [ab4 ~ f4 ~]>/2')
+    .sound('piano').room(.35).gain(.45);
+  const lhRidge = note('<[f2 c3 f3 ab3] [eb2 bb2 eb3 g3] [bb2 f3 bb3 d4] [g2 d3 g3 b3]>')
+    .sound('piano').room(.15).gain(.55);
+  const rhRidge = note('<[f4 ab4 c5 ab4] [g4 bb4 eb5 bb4] [f5 d5 bb4 f4] [d5 b4 g4 b4]>')
+    .sound('piano').room(.15).gain('[.7 .52 .62 .52]');
+
   const stepLight = stack(
     sound('framedrum:12 ~ ~ ~').gain(.7),
     sound('shaker_small*4').gain('[.25 .15]*2'),
@@ -211,10 +354,31 @@ function buildField() {
     sound('framedrum:12 ~ [~ framedrum:14] ~').gain(.7),
     sound('~ snare_rim:3 ~ snare_rim:3').gain(.4),
     sound('shaker_small*8').n('[0 2 4 1]*2').gain('[.25 .15]*4'),
+    sound('~ ~ ~ tambourine').gain(.25),
   );
+  const stepUnknown = stack(
+    sound('bassdrum1:5 ~ ~ ~').gain(.6),
+    sound('<sus_cymbal ~ ~ ~>').gain(.16),
+  );
+  const stepRidge = stack(
+    sound('<timpani:4 timpani:9 timpani:14 timpani_roll:2>').gain(.6),
+    sound('~ snare_rim:3 ~ [snare_rim:2 snare_rim:3]').gain(.4),
+    sound('shaker_small*8').gain('[.28 .16]*4'),
+  );
+  const stepHome = stack(
+    sound('framedrum:12 ~ [~ framedrum:14] ~').gain(.7),
+    sound('~ snare_rim:3 ~ snare_rim:3').gain(.4),
+    sound('shaker_small*8').n('[0 2 4 1]*2').gain('[.28 .16]*4'),
+    sound('~ ~ ~ tambourine').gain(.28),
+    sound('<timpani:4 ~ timpani:9 ~>').gain(.5),
+  );
+
   return arrange(
     [8, stack(lhDrive, rhHalf, stepLight)],
     [8, stack(lhDrive, rhRoad, stepRoad)],
+    [8, stack(lhUnknown, rhUnknown, stepUnknown)],
+    [8, stack(lhRidge, rhRidge, stepRidge)],
+    [8, stack(lhDrive, rhRoad, sparkle, stepHome)],
   );
 }
 
@@ -304,8 +468,6 @@ function buildBattle() {
   );
 }
 
-// The giant's music: slow menace on a tritone (F against Gb), stomping
-// half-time drums — nothing like the human songs.
 function buildBoss() {
   const { note, sound, stack, arrange, rand } = globalThis;
   const stomp = sound('bassdrum1 ~ ~ [~ bassdrum1]').n(7)
@@ -323,6 +485,13 @@ function buildBoss() {
     [8, stack(stomp, timp, bass, growl, piano, roll, cym)],
   );
 }
+
+const BUILDERS = {
+  village: buildVillage,
+  field: buildField,
+  battle: buildBattle,
+  boss: buildBoss,
+};
 
 // One instance for the whole app — survives scene restarts so the music
 // never cuts when the player retries.

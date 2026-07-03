@@ -42,7 +42,8 @@ export class BattleScene extends Phaser.Scene {
     this.battalions = [];
     this.giant = null;
     this.giantDefeated = false;
-    this.userPaused = !window.__mrStarted; // frozen until the START button
+    // frozen until the START button; a restart inherits the global pause
+    this.userPaused = !window.__mrStarted || !!window.__mrPaused;
 
     this.cameras.main.setBounds(0, 0, WORLD_W, 540);
 
@@ -75,7 +76,9 @@ export class BattleScene extends Phaser.Scene {
     cmd('FOUR', () => this.command('charge', 'CHAAARGE!'));
     cmd('Q', () => this.makeReady());
     cmd('E', () => this.volley());
-    cmd('ENTER', () => { if (this.defeated) { music.setDefeated(false); this.scene.restart(); } });
+    cmd('ENTER', () => {
+      if (this.defeated && !this.userPaused) { music.setDefeated(false); this.scene.restart(); }
+    });
   }
 
   // -------------------------------------------------------------------------
