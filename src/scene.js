@@ -467,17 +467,10 @@ export class BattleScene extends Phaser.Scene {
       this.clearedX = this.player.x;
       this.toast('area clear — it should stay quiet for a bit');
     }
-    const squad = [this.player, ...this.allies].filter(u => u.alive);
-    const avgHealth = squad.length
-      ? squad.reduce((s, u) => s + u.hp / u.maxHp, 0) / squad.length : 0;
-    return {
-      enemies: near,
-      peak: this.combatPeak,
-      avgHealth,
-      danger: dangerAt(this.player.x),
-      home: this.player.x < 520,
-      defeated: this.defeated,
-    };
+    // which song should be playing: battle > village > field
+    const zone = near > 0 ? 'battle'
+      : this.player.x < 520 ? 'village' : 'field';
+    return { zone };
   }
 
   // -------------------------------------------------------------------------

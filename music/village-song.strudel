@@ -1,0 +1,52 @@
+// VILLAGE (~2:10 loop) — C minor, Cm9 -> Abmaj9.
+// intro(8) themeA(8) themeB(8, sparkle enters) bridge(8) climax(12) outro(8)
+// Section lengths: keep multiples of 4 (patterns align to the absolute clock).
+
+setcpm(96/4)
+
+const MASTER = 1 // loudness reference for the three songs
+
+const lhA = note("<[c3 g3 c4 g3]*2 [ab2 eb3 ab3 eb3]*2>/2")
+  .sound("piano").room(.1).gain(.55)
+
+const rhIntro = note("<[eb4 d4 bb3 g3] [c4 bb3 ab3 eb3]>/2")
+  .sound("piano").room(.25).gain(.5)
+
+const rhTheme = note(`<
+  [[eb4 d4 bb3 g3]!3 [g4 f4 d4 bb3]]
+  [[c4 bb3 ab3 eb3]!3 [eb4 d4 c4 g3]]
+>/2`).sound("piano").room(.15).gain("[.72 .5 .6 .52]*4")
+
+const sparkle = note(`<
+  [[eb5 d5 bb4 g4]!3 [g5 f5 d5 bb4]]
+  [[c5 bb4 ab4 eb4]!3 [eb5 d5 c5 g4]]
+>/2`).sound("gm_celesta").room(.45).gain(.15)
+
+const counter = note("<[g3 ~ f3 eb3] [eb3 ~ d3 c3]>/2")
+  .sound("piano").room(.25).gain(.32)
+
+// bridge: iv -> bVII -> bIII -> V (the B natural pulls home)
+const lhB = note("<[f2 c3 f3 c3] [bb2 f3 bb3 f3] [eb3 bb3 eb4 bb3] [g2 d3 g3 b3]>")
+  .sound("piano").room(.15).gain(.55)
+
+const rhB = note("<[f4 g4 ab4 c5] [d5 c5 bb4 f4] [eb5 bb4 g4 bb4] [d5 b4 g4 ~]>")
+  .sound("piano").room(.2).gain("[.7 .52 .6 .52]")
+
+const sparkleB = note("<[c5 ~ ~ ~] [f5 ~ ~ ~] [g5 ~ ~ ~] [d5 ~ b4 ~]>")
+  .sound("gm_celesta").room(.7).gain(.12)
+
+const intro  = stack(lhA, rhIntro)
+const themeA = stack(lhA, rhTheme)
+const themeB = stack(lhA, rhTheme, sparkle)
+const bridge = stack(lhB, rhB, sparkleB)
+const climax = stack(lhA, rhTheme, sparkle, counter)
+const outro  = stack(lhA.gain(.5), rhIntro.gain(.45), sparkle.gain(.08))
+
+arrange(
+  [8,  intro],
+  [8,  themeA],
+  [8,  themeB],
+  [8,  bridge],
+  [12, climax],
+  [8,  outro],
+).postgain(MASTER)

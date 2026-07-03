@@ -1,0 +1,79 @@
+// DEPARTURE (~1:40 loop) — C minor, same tempo as village (crossfade-safe:
+// both A-sections loop the same 4-cycle Cm/Ab harmony).
+// depart(8) road(8) unknown(8, Bbm7 float) ridge(8, climb) homeward(8)
+// VCSL percussion: sample index = velocity layer (:0 softest).
+
+setcpm(96/4)
+
+const MASTER = 1 // match village's loudness
+
+const lhDrive = note("<[c3 g3 eb3 g3]*4 [ab2 eb3 c3 eb3]*4>/2")
+  .sound("piano").room(.1).gain("[.6 .42 .5 .42]*8")
+
+const rhHalf = note("<[eb4 d4 bb3 g3] [c4 bb3 ab3 eb3]>/2")
+  .sound("piano").room(.5).gain(.5)
+
+const rhRoad = note(`<
+  [[eb4 d4 bb3 g3]!2 [eb4 [d4 eb4] f4 g4] [bb4 g4 f4 d4]]
+  [[c4 bb3 ab3 eb3]!2 [c4 [bb3 c4] d4 eb4] [g4 eb4 d4 bb3]]
+>/2`).sound("piano").room(.25).gain("[.72 .5 .6 .52]*4")
+
+const sparkle = note(`<
+  [[eb5 d5 bb4 g4]!2 [eb5 [d5 eb5] f5 g5] [bb5 g5 f5 d5]]
+  [[c5 bb4 ab4 eb4]!2 [c5 [bb4 c5] d5 eb5] [g5 eb5 d5 bb4]]
+>/2`).sound("gm_celesta").room(.45).gain(.13)
+
+// unknown: Abmaj7 <-> Bbm7
+const lhUnknown = note("<[ab2 eb3 ab3 c4]*2 [bb2 f3 ab3 db4]*2>/2")
+  .sound("piano").room(.45).gain(.5)
+
+const rhUnknown = note("<[c5 ~ bb4 ~] [ab4 ~ f4 ~]>/2")
+  .sound("piano").room(.55).gain(.45)
+
+// ridge: Fm -> Eb -> Bb -> G
+const lhRidge = note("<[f2 c3 f3 ab3] [eb2 bb2 eb3 g3] [bb2 f3 bb3 d4] [g2 d3 g3 b3]>")
+  .sound("piano").room(.4).gain(.55)
+
+const rhRidge = note("<[f4 ab4 c5 ab4] [g4 bb4 eb5 bb4] [f5 d5 bb4 f4] [d5 b4 g4 b4]>")
+  .sound("piano").room(.3).gain("[.7 .52 .62 .52]")
+
+const stepLight = stack(
+  sound("framedrum:12 ~ ~ ~").gain(.7),
+  sound("shaker_small*4").gain("[.25 .15]*2"),
+)
+const stepRoad = stack(
+  sound("framedrum:12 ~ [~ framedrum:14] ~").gain(.7),
+  sound("~ snare_rim:3 ~ snare_rim:3").gain(.4),
+  sound("shaker_small*8").n("[0 2 4 1]*2").gain("[.25 .15]*4"),
+  sound("~ ~ ~ tambourine").gain(.25),
+)
+const stepUnknown = stack(
+  sound("bassdrum1:5 ~ ~ ~").gain(.6),
+  sound("<sus_cymbal ~ ~ ~>").gain(.16),
+)
+const stepRidge = stack(
+  sound("<timpani:4 timpani:9 timpani:14 timpani_roll:2>").gain(.6),
+  sound("~ snare_rim:3 ~ [snare_rim:2 snare_rim:3]").gain(.4),
+  sound("shaker_small*8").gain("[.28 .16]*4"),
+)
+const stepHome = stack(
+  sound("framedrum:12 ~ [~ framedrum:14] ~").gain(.7),
+  sound("~ snare_rim:3 ~ snare_rim:3").gain(.4),
+  sound("shaker_small*8").n("[0 2 4 1]*2").gain("[.28 .16]*4"),
+  sound("~ ~ ~ tambourine").gain(.28),
+  sound("<timpani:4 ~ timpani:9 ~>").gain(.5),
+)
+
+const depart   = stack(lhDrive, rhHalf, stepLight)
+const road     = stack(lhDrive, rhRoad, stepRoad)
+const unknown  = stack(lhUnknown, rhUnknown, stepUnknown)
+const ridge    = stack(lhRidge, rhRidge, stepRidge)
+const homeward = stack(lhDrive, rhRoad, sparkle, stepHome)
+
+arrange(
+  [8, depart],
+  [8, road],
+  [8, unknown],
+  [8, ridge],
+  [8, homeward],
+).postgain(MASTER)

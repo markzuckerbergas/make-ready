@@ -118,3 +118,9 @@ Deploys to GitHub Pages automatically on push to `main` (see
 is [AGPL-3.0 licensed](https://codeberg.org/uzu/strudel/src/branch/main/LICENSE.md);
 per its terms, the whole game is AGPL-3.0 open source with its source
 published (this repo — the deployed page links back here). Phaser is MIT.
+
+Audio: piano is the [Salamander Grand Piano](https://archive.org/details/SalamanderGrandPianoV3)
+by Alexander Holm (CC-BY 3.0); orchestral percussion from
+[VCSL](https://github.com/sgossner/VCSL) (CC0, Versilian Studios).
+The soundtrack itself is composed in [Strudel](https://strudel.cc) —
+sources in [`music/`](./music).
