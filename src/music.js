@@ -9,14 +9,13 @@ import { initStrudel } from '@strudel/web';
 //                 t0             t1
 //
 // Every layer is gated by signal(t => ...) — t is pattern time, so the cuts
-// are exact, not eased. The bridges are short composed passages that carry
-// the harmony from one song into the other:
-//   village->field  the left hand picks up its feet (quarters -> 8ths)
-//   field->village  the walk settles back down
-//   ->battle        the bass walks down C->Bb->Ab->G to Cm's dominant, which
-//                   pulls into battle's F minor as the snare call closes in
-//   battle->calm    the bass climbs home F->G->Ab->Bb->C, drums hand over
-//   ->boss / boss-> rumble, rolls, tritone growl
+// are exact, not eased. Bridges are STITCHED per transition: an exit half
+// picked by where the outgoing song stands (a hot battle section leaves
+// differently than the eye; the village outro leaves differently than its
+// climax) + an entry half picked by where the incoming song resumes (the
+// field's "unknown" float gets a floating entry, its ridge a timpani climb).
+// Harmonic glue: calm exits end on Cm ground, battle entries walk down to
+// C — the dominant of battle's F minor; stand-downs climb back i->v.
 //
 // Playheads: village & field resume (snapped to the 4-cycle phrase grid);
 // battle & boss always enter from the top — their openings are the ramp.
@@ -131,7 +130,10 @@ class MusicDirector {
       : (Math.floor((this.pos[want] ?? 0) / 4) * 4) % LEN[want];
     this.off[want] = t1 - p;
 
-    this.trans = { from: this.cur, to: want, t0, end: t1 };
+    this.trans = {
+      from: this.cur, to: want, t0, end: t1,
+      fromPos: this.pos[this.cur], toPos: p,
+    };
     this.rebuild();
   }
 
@@ -153,7 +155,7 @@ class MusicDirector {
 
     if (this.trans) {
       layers.push(
-        buildBridge(from, to).late(t0)
+        buildBridge(from, to, this.trans.fromPos, this.trans.toPos).late(t0)
           .postgain(signal(t => (t >= t0 && t < t1) ? vol() : 0)),
       );
     }
@@ -183,103 +185,166 @@ class MusicDirector {
 }
 
 // ---------------------------------------------------------------------------
-// The bridges — short composed passages from one song's ground to the
-// other's. Calm bridges are 4 cycles (one full Cm/Ab phrase); combat
-// entries are 2 cycles.
+// The bridges — stitched per transition from an EXIT half (chosen by where
+// the outgoing song IS) and an ENTRY half (chosen by where the incoming song
+// RESUMES). Calm bridges are 2+2 cycles; combat/boss entries are 1+1.
+// Different moments produce different bridges — the seam is composed for the
+// two specific timeframes it joins.
 // ---------------------------------------------------------------------------
 
-function buildBridge(from, to) {
-  if (to === 'battle') return bridgeToBattle();
-  if (to === 'boss') return bridgeToBoss();
-  if (from === 'battle' || from === 'boss') return bridgeStandDown();
-  return to === 'field' ? bridgeToField() : bridgeToVillage();
+function buildBridge(from, to, fromPos = 0, toPos = 0) {
+  const { arrange } = globalThis;
+  if (urgent(to)) {
+    return arrange([1, exitQuick(from, fromPos)], [1, to === 'boss' ? entryBoss() : entryBattle()]);
+  }
+  return arrange([2, exitHalf(from, fromPos)], [2, entryHalf(to, toPos)]);
 }
 
-// village -> field: the left hand picks up its feet, the frame drum wakes.
-// Keeps the Cm Cm Ab Ab phrase, so it slots into the loop both songs share.
-function bridgeToField() {
-  const { note, sound, stack } = globalThis;
+// which exit fits where the outgoing song stands right now
+function exitHalf(from, pos) {
+  if (from === 'battle') {
+    // eye (32-40) and the alarm (0-16) are cold; clash/final burn hot
+    const hot = (pos >= 16 && pos < 32) || (pos >= 40 && pos < 56);
+    return hot ? exitBattleHot() : exitBattleCold();
+  }
+  if (from === 'boss') return exitBoss();
+  if (from === 'village') {
+    const soft = pos < 8 || pos >= 44; // intro/outro
+    return soft ? exitCalmSoft() : exitCalmRun();
+  }
+  // field: the "unknown" float (16-24) leaves quietly, the rest at a walk
+  return (pos >= 16 && pos < 24) ? exitCalmSoft() : exitCalmRun();
+}
+
+function entryHalf(to, pos) {
+  if (to === 'village') return entryVillage(pos >= 16 && pos < 44); // sparkle era?
+  // field: where are we rejoining the journey?
+  if (pos >= 16 && pos < 24) return entryFieldFloat();
+  if (pos >= 24 && pos < 32) return entryFieldClimb();
+  return entryFieldRoad();
+}
+
+// ---- exit halves (2 cycles) -------------------------------------------------
+function exitCalmSoft() {
+  const { note, stack } = globalThis;
   return stack(
-    note(`<
-      [c3 g3 c4 g3]
-      [[c3 g3 eb3 g3]*2]
-      [ab2 eb3 ab3 eb3]
-      [[ab2 eb3 c3 eb3]*2]
-    >`).sound('piano').gain('[.6 .45 .52 .45]*2'),
-    note('<~ [~ ~ eb4 f4] [g4 ~ f4 ~] [g4 f4 [g4 bb4] ~]>')
-      .sound('piano').room(.2).gain(.55),
-    sound(`<
-      ~
-      [~ ~ framedrum:12 ~]
-      [framedrum:12 ~ framedrum:13 ~]
-      [framedrum:12 framedrum:14 [framedrum:15 framedrum:15] [framedrum:16 framedrum:16]]
-    >`).gain(.65),
+    note('<[c3 ~ g3 ~] [c3 ~ ~ ~]>').sound('piano').room(.2).gain(.5),
+    note('<[g4 f4 eb4 ~] [eb4 ~ d4 ~]>').sound('piano').room(.3).gain(.5),
   );
 }
 
-// field -> village: the walk settles back down toward the hearth
-function bridgeToVillage() {
+function exitCalmRun() {
   const { note, sound, stack } = globalThis;
   return stack(
-    note(`<
-      [[c3 g3 eb3 g3]*2]
-      [c3 g3 c4 g3]
-      [ab2 eb3 ab3 eb3]
-      [ab2 ~ eb3 ~]
-    >`).sound('piano').gain('[.55 .42 .48 .42]*2'),
-    note('<[g4 f4 eb4 ~] [eb4 ~ d4 ~] [c4 ~ ~ ~] [~ ~ [d4 eb4] ~]>')
-      .sound('piano').room(.25).gain(.5),
-    sound('<[framedrum:12 ~ framedrum:13 ~] [framedrum:12 ~ ~ ~] [~ ~ framedrum:11 ~] ~>')
-      .gain(.55),
+    note('<[[c3 g3 eb3 g3]*2] [c3 g3 eb3 g3]>').sound('piano').gain('[.55 .42 .48 .42]*2'),
+    note('<[eb4 d4 bb3 g3] [c4 d4 eb4 f4]>').sound('piano').room(.2).gain(.55),
+    sound('<[framedrum:12 ~ framedrum:13 ~] [framedrum:12 ~ ~ ~]>').gain(.55),
   );
 }
 
-// (anything calm) -> battle: 2 cycles — the bass walks down C->Bb->Ab->G to
-// C (the dominant of F minor) while the snare call closes in.
-function bridgeToBattle() {
+function exitBattleHot() {
   const { note, sound, stack } = globalThis;
   return stack(
-    note('<[c2 c2 bb1 bb1] [ab1 ab1 g1 [g1 c2]]>')
-      .sound('sawtooth').lpf(500).gain(.5),
-    note('<[eb4 ~ d4 ~] [c4 ~ b3 c4]>')
-      .sound('piano').room(.2).gain(.6),
-    sound(`<
-      [~ ~ [snare_low:17*4] ~]
-      [[snare_low:18*8] snare_low:19 [snare_low:18*4] [snare_low:19 snare_low:19]]
-    >`).gain(.8),
-    sound('<~ [bassdrum1:6 ~ bassdrum1:7 ~]>').gain(1),
-    sound('<~ timpani_roll:4>').gain(.5),
+    note('<[f1 f1 f1 f1] [f1 ~ f1 ~]>').sound('sawtooth').lpf(500).gain(.45),
+    note('<[ab3 ~ g3 ~] [f3 ~ ~ ~]>').sound('piano').room(.25).gain(.55),
+    sound('<[bassdrum1:6 ~ bassdrum1:5 ~] [bassdrum1:6 ~ ~ ~]>').gain(1),
+    sound('<[[snare_low:18*4] snare_low:19 ~ ~] [~ ~ snare_low:15 ~]>').gain(.7),
   );
 }
 
-// battle/boss -> calm: 4 cycles — the bass climbs home F->G->Ab->Bb->C,
-// the war machine hands over to the frame drum, the call recedes.
-function bridgeStandDown() {
+function exitBattleCold() {
   const { note, sound, stack } = globalThis;
   return stack(
-    note('<[f1 ~ f1 ~] [g1 ~ ab1 ~] [bb1 ~ bb1 ~] [c2 ~ [g1 c2] ~]>')
-      .sound('sawtooth').lpf(450).gain(.45),
-    note('<[ab3 g3 ~ eb3] [f3 ~ eb3 ~] [eb4 ~ d4 ~] [c4 ~ [d4 eb4] ~]>')
-      .sound('piano').room(.25).gain(.55),
-    sound(`<
-      [bassdrum1:6 ~ ~ ~]
-      [framedrum:12 ~ ~ ~]
-      [framedrum:12 ~ [~ framedrum:14] ~]
-      [framedrum:12 ~ ~ ~]
-    >`).gain(.7),
-    sound('<[snare_low:17 ~ [snare_low:16 snare_low:17] ~] [~ ~ snare_low:15 ~] [~ snare_low:13 ~ ~] ~>')
-      .gain(.5),
+    note('<[f1 ~ ~ ~] [f1 ~ c2 ~]>').sound('sawtooth').lpf(400).gain(.4),
+    note('<[ab3 ~ g3 ~] [f3 ~ eb3 ~]>').sound('piano').room(.35).gain(.5),
+    sound('<[bassdrum1:5 ~ ~ ~] [bassdrum1:5 ~ ~ ~]>').gain(.7),
+    sound('<~ [~ ~ snare_low:13 ~]>').gain(.4),
   );
 }
 
-// -> boss: 2 cycles of rumble and roll into the tritone
-function bridgeToBoss() {
+function exitBoss() {
   const { note, sound, stack } = globalThis;
   return stack(
-    note('<[f1 f1 f1 f1] [gb1 gb1 f1 f1]>').sound('sawtooth').lpf(300).gain(.5),
-    sound('<[~ ~ bassdrum1:7 ~] [bassdrum1:7 ~ bassdrum1:7 bassdrum1:7]>').gain(1.3),
-    sound('<timpani_roll:5 timpani_roll:2>').gain(.6),
-    sound('<~ sus_cymbal>').gain(.35),
+    note('<[f1 ~ gb1 ~] [f1 ~ ~ ~]>').sound('sawtooth').lpf(300).gain(.45),
+    sound('<[bassdrum1:7 ~ ~ ~] [~ ~ bassdrum1:5 ~]>').gain(1.1),
+    sound('<[snare_low:11*8] [snare_low:9*8]>').gain('[.18 .1]*4'),
+  );
+}
+
+// ---- entry halves (2 cycles) --------------------------------------------------
+function entryVillage(withSparkle) {
+  const { note, stack } = globalThis;
+  const base = stack(
+    note('<[c3 ~ g3 ~] [c3 g3 c4 g3]>').sound('piano').room(.15).gain(.5),
+    note('<[~ ~ d4 eb4] [g4 ~ [d4 eb4] ~]>').sound('piano').room(.25).gain(.5),
+  );
+  if (!withSparkle) return base;
+  return stack(base,
+    note('<~ [eb5 ~ d5 ~]>').sound('piano').room(.45).gain(.12));
+}
+
+function entryFieldRoad() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('<[c3 g3 eb3 g3] [[c3 g3 eb3 g3]*2]>').sound('piano').gain('[.5 .4 .45 .4]*2'),
+    note('<[~ eb4 f4 g4] [g4 f4 [g4 bb4] ~]>').sound('piano').room(.2).gain(.55),
+    sound('<[~ ~ framedrum:12 ~] [framedrum:12 framedrum:14 [framedrum:15 framedrum:15] [framedrum:16 framedrum:16]]>')
+      .gain(.65),
+  );
+}
+
+function entryFieldFloat() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('<[ab2 eb3 ab3 c4] [bb2 f3 ab3 db4]>').sound('piano').room(.3).gain(.5),
+    note('<[c5 ~ ~ ~] [~ ~ bb4 ~]>').sound('piano').room(.4).gain(.45),
+    sound('<sus_cymbal ~>').gain(.18),
+  );
+}
+
+function entryFieldClimb() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('<[c4 eb4 f4 ~] [f4 g4 ab4 ~]>').sound('piano').room(.2).gain(.55),
+    note('<[f2 ~ c3 ~] [f2 c3 f3 ab3]>').sound('piano').room(.15).gain(.5),
+    sound('<[timpani:4 ~ ~ ~] [~ ~ timpani:9 ~]>').gain(.55),
+    sound('<~ [shaker_small*8]>').gain('[.25 .15]*4'),
+  );
+}
+
+// ---- urgent halves (1 cycle each) ---------------------------------------------
+function exitQuick(from, pos) {
+  const { note, sound, stack } = globalThis;
+  if (from === 'battle' || from === 'boss') {
+    return stack(
+      note('[f1 f1 [f1 f1] ~]').sound('sawtooth').lpf(450).gain(.45),
+      sound('[bassdrum1:6 ~ bassdrum1:7 ~]').gain(1),
+    );
+  }
+  // calm exit, one bar: the melody stops mid-step
+  return stack(
+    note('[eb4 d4 c4 ~]').sound('piano').room(.2).gain(.55),
+    note('[c3 ~ g2 ~]').sound('piano').gain(.5),
+  );
+}
+
+function entryBattle() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('[c2 c2 bb1 [ab1 g1]]').sound('sawtooth').lpf(500).gain(.5),
+    note('[c4 ~ b3 c4]').sound('piano').room(.2).gain(.6),
+    sound('[~ [snare_low:17*4] snare_low:18 [snare_low:19*4]]').gain(.8),
+    sound('[~ ~ bassdrum1:6 ~]').gain(1),
+    sound('[~ ~ ~ timpani_roll:4]').gain(.5),
+  );
+}
+
+function entryBoss() {
+  const { note, sound, stack } = globalThis;
+  return stack(
+    note('[gb1 gb1 f1 f1]').sound('sawtooth').lpf(300).gain(.5),
+    sound('[bassdrum1:7 ~ bassdrum1:7 bassdrum1:7]').gain(1.3),
+    sound('timpani_roll:5').gain(.6),
   );
 }
 

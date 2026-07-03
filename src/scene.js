@@ -129,7 +129,10 @@ export class BattleScene extends Phaser.Scene {
     const mx = unit.x + Math.cos(a) * 16 * ds;
     const my = unit.y - 13 * ds + Math.sin(a) * 6;
     const img = this.add.image(mx, my, 'bullet').setRotation(a).setDepth(unit.y);
-    this.bullets.push({ x: mx, y: my, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, dmg, life, img, hostile });
+    this.bullets.push({
+      x: mx, y: my, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950,
+      dmg, life, img, hostile, fromPlayer: unit === this.player,
+    });
     this.muzzleFx(mx, my);
     sfx.shot();
   }
@@ -300,10 +303,19 @@ export class BattleScene extends Phaser.Scene {
         if (Math.hypot(u.x - b.x, (u.y - 13 * dscale(u.y)) - b.y) < 15 * dscale(u.y)) {
           u.takeDamage(b.dmg);
           b.life = 0;
+          b.hit = true;
+          const fx = this.add.circle(b.x, b.y, 5, 0xe05252, .85).setDepth(9000);
+          this.tweens.add({ targets: fx, alpha: 0, scale: 2.2, duration: 200, onComplete: () => fx.destroy() });
           break;
         }
       }
       if (b.life <= 0 || b.y < PLAY.horizon - 40 || b.y > 560) {
+        // show the PLAYER where a missed ball lands — a miss should never
+        // look like a hit that failed to kill
+        if (b.fromPlayer && !b.hit) {
+          const fx = this.add.circle(b.x, b.y, 3, 0xc9c9b0, .6).setDepth(9000);
+          this.tweens.add({ targets: fx, alpha: 0, scale: 2, y: b.y - 6, duration: 350, onComplete: () => fx.destroy() });
+        }
         b.img.destroy();
         b.dead = true;
       }
