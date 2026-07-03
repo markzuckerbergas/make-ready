@@ -324,13 +324,13 @@ export class Ally extends Unit {
 // ---------------------------------------------------------------------------
 export const ENEMY_TYPES = {
   grunt:      { tex: 'enemy_grunt',      hp: 60, speed: 46,  melee: { dmg: 8,  cd: .85 } },
-  skirmisher: { tex: 'enemy_skirmisher', hp: 50, speed: 78,  rifle: { range: 430, spread: 13, dmg: 9,  reload: 3.6 } },
+  skirmisher: { tex: 'enemy_skirmisher', hp: 50, speed: 78,  rifle: { range: 430, spread: 13, dmg: 5,  reload: 3.6 } },
   runner:     { tex: 'enemy_runner',     hp: 45, speed: 160, melee: { dmg: 7,  cd: .6 } },
-  marksman:   { tex: 'enemy_marksman',   hp: 55, speed: 74,  rifle: { range: 580, spread: 3,  dmg: 16, reload: 3.4 } },
+  marksman:   { tex: 'enemy_marksman',   hp: 55, speed: 74,  rifle: { range: 580, spread: 3,  dmg: 8,  reload: 3.4 } },
   veteran:    { tex: 'enemy_veteran',    hp: 95, speed: 105, melee: { dmg: 12, cd: .7 },
-                                                             rifle: { range: 470, spread: 6,  dmg: 12, reload: 3 } },
+                                                             rifle: { range: 470, spread: 6,  dmg: 6,  reload: 3 } },
   battalion:  { tex: 'enemy_battalion',  hp: 55, speed: 82,  melee: { dmg: 6,  cd: 1 },
-                                                             rifle: { range: 520, spread: 6,  dmg: 9,  reload: 3.2 } },
+                                                             rifle: { range: 520, spread: 6,  dmg: 5,  reload: 3.2 } },
 };
 
 export class Enemy extends Unit {
