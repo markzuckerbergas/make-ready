@@ -119,14 +119,14 @@ export class BattleScene extends Phaser.Scene {
   // -------------------------------------------------------------------------
   // Combat helpers (used by entities)
   // -------------------------------------------------------------------------
-  shoot(unit, angle, spreadDeg, dmg, hostile = false) {
+  shoot(unit, angle, spreadDeg, dmg, hostile = false, life = .8) {
     const spread = (Math.random() - .5) * 2 * spreadDeg * (Math.PI / 180);
     const a = angle + spread;
     const ds = dscale(unit.y);
     const mx = unit.x + Math.cos(a) * 16 * ds;
     const my = unit.y - 13 * ds + Math.sin(a) * 6;
     const img = this.add.image(mx, my, 'bullet').setRotation(a).setDepth(unit.y);
-    this.bullets.push({ x: mx, y: my, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, dmg, life: .8, img, hostile });
+    this.bullets.push({ x: mx, y: my, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, dmg, life, img, hostile });
     this.muzzleFx(mx, my);
     sfx.shot();
   }

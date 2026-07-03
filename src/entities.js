@@ -174,7 +174,8 @@ export class Player extends Unit {
     if (this.weapon === 'rifle') {
       if (!this.loaded) { this.scene.toast(this.reloadT > 0 ? 'reloading…' : 'click! — R to reload'); return; }
       this.loaded = false;
-      this.scene.shoot(this, pointerAngle, 2.5, 999); // one shot, one kill (for now)
+      // one shot, one kill — and a Martini-Henry carries: ~1700px of flight
+      this.scene.shoot(this, pointerAngle, 2.5, 999, false, 1.8);
     } else {
       this.swing();
     }
@@ -523,6 +524,15 @@ export class Giant extends Unit {
   }
 
   currentTexture() { return this.baseTex; } // one imposing pose
+
+  // no single ball fells a giant — any hit is capped, the rifle included
+  takeDamage(n) {
+    if (this.alive && n > 150 && !this.flinched) {
+      this.flinched = true;
+      this.scene.toast('the giant barely flinches!');
+    }
+    super.takeDamage(Math.min(n, 150));
+  }
 
   update(dt, scene) {
     if (!this.alive) return;
