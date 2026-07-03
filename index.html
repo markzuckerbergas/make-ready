@@ -32,8 +32,9 @@
                       color: #0e0f13; font-weight: 700; }
     #footer { font-size: .8rem; color: #888; }
     #footer a { color: #aaa; }
-    #controls { display: flex; gap: 3rem; flex-wrap: wrap; justify-content: center;
-                max-width: 960px; margin-top: .4rem; }
+    #pageCols { display: flex; gap: 2.5rem; flex-wrap: wrap; justify-content: center;
+                align-items: flex-start; max-width: 960px; margin-top: .4rem; }
+    #controls { display: flex; flex-direction: column; gap: 1.2rem; flex: 1 1 480px; }
     #controls h4 { margin: .2rem 0 .4rem; color: #b8bcc4; font-size: .85rem;
                    text-transform: uppercase; letter-spacing: .08em; }
     #controls table { border-collapse: collapse; font-size: .85rem; color: #aab; }
@@ -42,6 +43,19 @@
                                white-space: nowrap; }
     #flavor { max-width: 820px; text-align: center; color: #8a8f98; font-size: .85rem;
               margin: .4rem 0 0; }
+    #feedback { flex: 1 1 300px; max-width: 380px; }
+    #feedback h4 { margin: .2rem 0 .4rem; color: #b8bcc4; font-size: .85rem;
+                   text-transform: uppercase; letter-spacing: .08em; }
+    #feedback .hint { color: #8a8f98; font-size: .85rem; margin: 0 0 .6rem; }
+    #feedback input[type=text], #feedback input[type=email], #feedback textarea {
+      width: 100%; box-sizing: border-box; background: #1a1d24; color: #eee;
+      border: 1px solid #333a45; border-radius: 6px; padding: .5rem .6rem;
+      margin-bottom: .5rem; font-family: inherit; font-size: .9rem; }
+    #feedback textarea { resize: vertical; }
+    #feedback button { background: #3ecf6a; color: #0e0f13; font-weight: 700;
+                       border: 0; border-radius: 6px; padding: .5rem 1.4rem; cursor: pointer; }
+    #feedback .hp { display: none; }
+    #fbStatus { color: #9fdcb2; font-size: .85rem; min-height: 1.2em; margin-top: .4rem; }
     #vuRow { display: flex; align-items: center; gap: .5rem; font-size: .75rem;
              color: #8a8f98; margin-top: .2rem; }
     #vu { width: 140px; height: 8px; background: #2a2d33; border-radius: 4px; overflow: hidden; }
@@ -70,6 +84,7 @@
     <label>sfx vol <input id="sfxVol" type="range" min="0" max="100" value="80" /></label>
   </div>
 
+  <div id="pageCols">
   <section id="controls">
     <div>
       <h4>You</h4>
@@ -94,6 +109,24 @@
       </table>
     </div>
   </section>
+
+  <section id="feedback">
+    <h4>Dispatches</h4>
+    <p class="hint">Found a bug? Balance gripe? A note on the music?
+      Send word from the field.</p>
+    <form id="fbForm">
+      <input type="hidden" name="access_key" value="c5f8bfb6-0fe0-43c2-8528-e37f2fd98a54" />
+      <input type="hidden" name="subject" value="make-ready feedback" />
+      <input type="hidden" name="from_name" value="make-ready page" />
+      <input type="checkbox" name="botcheck" class="hp" tabindex="-1" autocomplete="off" />
+      <input type="text" name="name" placeholder="callsign (optional)" />
+      <input type="email" name="email" placeholder="email (optional, if you want a reply)" />
+      <textarea name="message" rows="6" required placeholder="your dispatch…"></textarea>
+      <button type="submit">send dispatch</button>
+      <div id="fbStatus"></div>
+    </form>
+  </section>
+  </div>
   <p id="flavor">
     Rest at the homestead to heal and rally fallen allies. The deeper east you
     push, the tougher the enemies — and the rarer the artifacts. Loot counts once

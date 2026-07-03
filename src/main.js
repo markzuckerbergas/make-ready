@@ -66,3 +66,41 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) pause
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && window.__mrStarted) (paused ? resumeGame() : pauseGame());
 });
+
+// ---- feedback form (Web3Forms) -----------------------------------------------
+// Submitted with fetch so the player never leaves the game. While typing,
+// the game's keyboard is suspended — SPACE should type a space, not swing
+// a sword — and Phaser's key capture is released so keys reach the field.
+const fbForm = document.getElementById('fbForm');
+if (fbForm) {
+  const setTyping = typing => {
+    const sc = scene();
+    if (!sc?.input?.keyboard) return;
+    sc.input.keyboard.enabled = !typing;
+    if (typing) sc.input.keyboard.disableGlobalCapture();
+    else sc.input.keyboard.enableGlobalCapture();
+  };
+  fbForm.addEventListener('focusin', () => setTyping(true));
+  fbForm.addEventListener('focusout', () => setTyping(false));
+
+  fbForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const status = document.getElementById('fbStatus');
+    status.textContent = 'sending…';
+    try {
+      const res = await fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        body: new FormData(fbForm),
+      });
+      const data = await res.json();
+      if (data.success) {
+        status.textContent = 'dispatch received — thank you, soldier ✔';
+        fbForm.reset();
+      } else {
+        status.textContent = 'that misfired — try again in a moment';
+      }
+    } catch {
+      status.textContent = 'no courier available — check your connection';
+    }
+  });
+}
