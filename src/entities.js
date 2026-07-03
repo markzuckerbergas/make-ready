@@ -275,8 +275,8 @@ export class Ally extends Unit {
     scene.shoot(this, Math.atan2(target.y - this.y, target.x - this.x), spreadDeg, dmg);
   }
 
-  volley(scene) {
-    const t = scene.nearestEnemy(this, 880);
+  volleyAt(scene, target) {
+    const t = target?.alive ? target : scene.nearestEnemy(this, 880);
     if (this.alive && this.loaded && t) {
       // MAKE READY -> FIRE pays off: tighter spread, harder hit
       this.shoot(scene, t, this.readied ? 1.5 : 6, this.readied ? 58 : 40);
@@ -297,12 +297,14 @@ export class Ally extends Unit {
 // linger, and eventually slink away.
 // ---------------------------------------------------------------------------
 export const ENEMY_TYPES = {
-  grunt:      { tex: 'enemy_grunt',      hp: 60, speed: 62,  melee: { dmg: 8,  cd: .85 } },
+  grunt:      { tex: 'enemy_grunt',      hp: 60, speed: 46,  melee: { dmg: 8,  cd: .85 } },
   skirmisher: { tex: 'enemy_skirmisher', hp: 50, speed: 78,  rifle: { range: 430, spread: 13, dmg: 9,  reload: 3.6 } },
   runner:     { tex: 'enemy_runner',     hp: 45, speed: 160, melee: { dmg: 7,  cd: .6 } },
   marksman:   { tex: 'enemy_marksman',   hp: 55, speed: 74,  rifle: { range: 580, spread: 3,  dmg: 16, reload: 3.4 } },
   veteran:    { tex: 'enemy_veteran',    hp: 95, speed: 105, melee: { dmg: 12, cd: .7 },
                                                              rifle: { range: 470, spread: 6,  dmg: 12, reload: 3 } },
+  battalion:  { tex: 'enemy_battalion',  hp: 55, speed: 82,  melee: { dmg: 6,  cd: 1 },
+                                                             rifle: { range: 520, spread: 6,  dmg: 9,  reload: 3.2 } },
 };
 
 export class Enemy extends Unit {
@@ -321,6 +323,12 @@ export class Enemy extends Unit {
     this.idleT = 0; // time spent with no reachable target
   }
 
+  orderReload() {
+    if (this.alive && this.spec.rifle && !this.loaded && this.reloadT <= 0) {
+      this.reloadT = this.spec.rifle.reload;
+    }
+  }
+
   update(dt, scene) {
     if (!this.alive) return;
     this.atkCd = Math.max(0, this.atkCd - dt);
@@ -328,6 +336,7 @@ export class Enemy extends Unit {
       this.reloadT -= dt;
       if (this.reloadT <= 0) this.loaded = true;
     }
+    if (this.drilled) { this.updateDrilled(dt, scene); return; }
     const t = scene.nearestSquad(this);
     const reachable = t && t.x >= SAFE_EDGE;
 
@@ -378,9 +387,172 @@ export class Enemy extends Unit {
     this.updateVisual(dt);
   }
 
+  // battalion member: holds formation, faces the enemy, fires only on orders,
+  // draws steel if someone gets in among the ranks
+  updateDrilled(dt, scene) {
+    const t = scene.nearestSquad(this);
+    if (t) {
+      const d = dist(this, t);
+      if (d < 30 * dscale(this.y)) {
+        if (this.atkCd <= 0) {
+          this.atkCd = this.spec.melee.cd;
+          t.takeDamage(this.spec.melee.dmg);
+          scene.slashFx(this.x, this.y - 10, Math.atan2(t.y - this.y, t.x - this.x), 0xff8866);
+        }
+      } else if (this.targetSlot) {
+        this.moveToward(this.targetSlot.x, this.targetSlot.y, dt);
+        this.facing = t.x > this.x ? 1 : -1;
+      }
+    }
+    if (this.x < SAFE_EDGE) this.x = SAFE_EDGE;
+    this.clampToField();
+    this.updateVisual(dt);
+  }
+
   die() {
     super.die();
     this.scene.tweens.add({ targets: [this.sprite, this.shadow], alpha: 0, delay: 900, duration: 500 });
     this.scene.time.delayedCall(1500, () => this.destroy());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Battalion: four drilled skirmishers under a leader who runs the same drill
+// the player does — make ready -> FIRE -> forward -> form line — and shouts
+// the orders. The volley spreads across the player AND the allies.
+// ---------------------------------------------------------------------------
+export class Battalion {
+  constructor(scene, x, y) {
+    this.scene = scene;
+    this.anchor = { x, y };
+    this.state = 'ready';
+    this.t = 1.2;
+    this.dead = false;
+    this.members = [];
+    for (let i = 0; i < 4; i++) {
+      const m = new Enemy(scene, x + (i % 2) * 34, y + Math.floor(i / 2) * 30, 'battalion');
+      m.drilled = true;
+      this.members.push(m);
+      scene.enemies.push(m);
+    }
+  }
+
+  alive() { return this.members.some(m => m.alive); }
+  leader() { return this.members.find(m => m.alive); }
+
+  update(dt) {
+    const scene = this.scene;
+    if (!this.alive()) { this.dead = true; return; }
+    const lead = this.leader();
+    const target = scene.nearestSquad(lead);
+    if (!target) return;
+
+    // facing vector toward the squad
+    let fx = target.x - this.anchor.x, fy = target.y - this.anchor.y;
+    const fl = Math.hypot(fx, fy) || 1;
+    fx /= fl; fy /= fl;
+    const px = -fy, py = fx;
+
+    if (this.state === 'moving') {
+      this.anchor.x = clamp(this.anchor.x + fx * 52 * dt, SAFE_EDGE + 120, PLAY.right);
+      this.anchor.y = clamp(this.anchor.y + fy * 52 * dt, PLAY.top, PLAY.bottom);
+    }
+
+    // slots: line abreast (facing the squad) except when marching in column
+    const live = this.members.filter(m => m.alive);
+    live.forEach((m, i) => {
+      const sIdx = i - (live.length - 1) / 2;
+      m.targetSlot = this.state === 'moving'
+        ? { x: this.anchor.x + px * (i % 2 ? 18 : -18) - fx * (i < 2 ? 0 : 26),
+            y: this.anchor.y + py * (i % 2 ? 18 : -18) - fy * (i < 2 ? 0 : 26) }
+        : { x: this.anchor.x + px * sIdx * 34, y: this.anchor.y + py * sIdx * 34 };
+    });
+
+    this.t -= dt;
+    if (this.t > 0) return;
+    switch (this.state) {
+      case 'ready':
+        live.forEach(m => m.orderReload());
+        scene.enemyShout(lead, 'MAKE READY!');
+        this.state = 'fire'; this.t = 2.8;
+        break;
+      case 'fire': {
+        scene.enemyShout(lead, 'FIRE!');
+        const squad = [scene.player, ...scene.allies].filter(u => u.alive);
+        live.forEach((m, i) => {
+          const victim = squad[i % squad.length];
+          scene.time.delayedCall(i * 110, () => {
+            if (m.alive && m.loaded && victim.alive) {
+              m.loaded = false;
+              const ds = dscale(victim.y);
+              const a = Math.atan2((victim.y - 13 * ds) - m.y, victim.x - m.x);
+              scene.shoot(m, a, m.spec.rifle.spread, m.spec.rifle.dmg, true);
+            }
+          });
+        });
+        this.state = 'advance'; this.t = .9;
+        break;
+      }
+      case 'advance':
+        scene.enemyShout(lead, 'FORWARD!');
+        this.state = 'moving'; this.t = 2.4;
+        break;
+      case 'moving':
+        scene.enemyShout(lead, 'FORM LINE!');
+        this.state = 'line'; this.t = 1.4;
+        break;
+      case 'line':
+        this.state = 'ready'; this.t = .3;
+        break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The Giant: a lumbering boss guarding the deep east. Throws rocks from
+// range, swings at anyone who closes in, and never strays far from its lair.
+// ---------------------------------------------------------------------------
+export class Giant extends Unit {
+  constructor(scene, x, y) {
+    super(scene, x, y, 'enemy_giant', { hp: 650, speed: 34 });
+    this.isBoss = true;
+    this.bodyR = 16;
+    this.atkCd = 0;
+    this.rockCd = 2;
+    this.lairX = x;
+  }
+
+  currentTexture() { return this.baseTex; } // one imposing pose
+
+  update(dt, scene) {
+    if (!this.alive) return;
+    this.atkCd = Math.max(0, this.atkCd - dt);
+    this.rockCd = Math.max(0, this.rockCd - dt);
+    const t = scene.nearestSquad(this);
+    if (t) {
+      const d = dist(this, t);
+      if (this.x < this.lairX - 900) {
+        this.moveToward(this.lairX, this.y, dt); // leashed to its lair
+      } else if (d < 70 * dscale(this.y)) {
+        if (this.atkCd <= 0) {
+          this.atkCd = 1.3;
+          t.takeDamage(22);
+          scene.slashFx(this.x, this.y - 16, Math.atan2(t.y - this.y, t.x - this.x), 0xffaa66);
+        }
+      } else {
+        if (d > 420) this.moveToward(t.x, t.y, dt);
+        if (this.rockCd <= 0 && d < 900) {
+          this.rockCd = 3.2;
+          scene.throwRock(this, t);
+        }
+      }
+    }
+    this.clampToField();
+    this.updateVisual(dt);
+  }
+
+  die() {
+    super.die();
+    this.scene.onGiantSlain?.(this);
   }
 }

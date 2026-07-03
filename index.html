@@ -20,7 +20,15 @@
   <style>
     body { margin: 0; background: #0e0f13; color: #eee; font-family: system-ui, sans-serif;
            display: flex; flex-direction: column; align-items: center; gap: .4rem; }
-    #app { margin-top: .6rem; }
+    #app { margin-top: .6rem; position: relative; }
+    .overlay { position: absolute; inset: 0; z-index: 10; display: flex;
+               flex-direction: column; align-items: center; justify-content: center;
+               gap: 1rem; background: rgba(10, 11, 16, .82); }
+    .overlay h2 { margin: 0; color: #ffe9a0; letter-spacing: .06em; }
+    .overlay p { margin: 0; color: #aab; font-size: .9rem; }
+    .overlay button { padding: .7rem 2.4rem; font-size: 1.2rem; border: 0;
+                      border-radius: 8px; cursor: pointer; background: #3ecf6a;
+                      color: #0e0f13; font-weight: 700; }
     #footer { font-size: .8rem; color: #888; }
     #footer a { color: #aaa; }
     #controls { display: flex; gap: 3rem; flex-wrap: wrap; justify-content: center;
@@ -43,7 +51,18 @@
   </style>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <div id="startOverlay" class="overlay">
+      <h2>make ready — FIRE!</h2>
+      <p>samples load on start — give it a moment on first visit</p>
+      <button id="startBtn">▶ START</button>
+    </div>
+    <div id="pauseOverlay" class="overlay" hidden>
+      <h2>PAUSED</h2>
+      <p>the battle (and the band) wait for you</p>
+      <button id="resumeBtn">resume</button>
+    </div>
+  </div>
   <div id="vuRow">
     <span>music</span><div id="vu"><div id="vuFill"></div></div>
     <label>music vol <input id="musicVol" type="range" min="0" max="100" value="60" /></label>
@@ -55,6 +74,7 @@
       <h4>You</h4>
       <table>
         <tr><td>WASD / arrows</td><td>move — your facing follows your movement</td></tr>
+        <tr><td>ESC</td><td>pause (also auto-pauses when the window loses focus)</td></tr>
         <tr><td>X or TAB</td><td>switch weapon: stow the rifle, draw the sword (takes a moment)</td></tr>
         <tr><td>click</td><td>attack with the weapon in hand — the rifle aims at your cursor</td></tr>
         <tr><td>R</td><td>reload the Martini-Henry (single shot, slow reload)</td></tr>

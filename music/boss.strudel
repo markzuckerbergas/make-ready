@@ -1,0 +1,22 @@
+// BOSS — the giant (16-cycle loop, the version the game plays).
+// Slow menace on a tritone (F against Gb), stomping half-time drums.
+
+setcpm(96/4)
+
+const MASTER = .6
+
+const stomp = sound("bassdrum1 ~ ~ [~ bassdrum1]").n(7)
+  .speed(rand.range(.88, .98)).gain(1.5)
+const timp = sound("<timpani:17 ~ timpani:19 ~>").gain(.9)
+const bass = note("<[f1 ~ gb1 ~] [f1 ~ e1 ~]>/2")
+  .sound("sawtooth").lpf(380).gain(.55)
+const growl = note("f1").struct("x*16").sound("sawtooth").lpf(200).gain(.22)
+const piano = note("<[f4 ~ gb4 ~] [~ e4 ~ f4]>/2")
+  .sound("piano").room(.3).gain(.5)
+const roll = sound("snare_low*16").n(11).gain("[.2 .12 .15 .12]*4")
+const cym = sound("<sus_cymbal ~ ~ ~>").gain(.25)
+
+arrange(
+  [8, stack(stomp, timp, bass, growl, piano)],
+  [8, stack(stomp, timp, bass, growl, piano, roll, cym)],
+).postgain(MASTER)

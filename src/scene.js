@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { WORLD_W, PLAY, SAFE_EDGE, dangerAt, dscale, clamp, dist } from './world.js';
-import { Player, Ally, Enemy } from './entities.js';
+import { Player, Ally, Enemy, Battalion, Giant } from './entities.js';
 import { sfx } from './sfx.js';
 import { music } from './music.js';
 
@@ -39,13 +39,15 @@ export class BattleScene extends Phaser.Scene {
     this.combatPeak = 0;    // biggest enemy count of the current engagement
     this.villageT = 0;      // time spent resting in the village
     this.defeated = false;
-    this.soundUnlocked = false; // first gesture only unlocks audio, never fires
+    this.battalions = [];
+    this.giant = null;
+    this.giantDefeated = false;
+    this.userPaused = !window.__mrStarted; // frozen until the START button
 
     this.cameras.main.setBounds(0, 0, WORLD_W, 540);
 
     this.setupInput();
     this.buildHud();
-    music.attach(this);
   }
 
   setupInput() {
@@ -54,13 +56,10 @@ export class BattleScene extends Phaser.Scene {
     this.input.keyboard.addCapture('SPACE,UP,DOWN,LEFT,RIGHT,TAB');
 
     this.input.on('pointerdown', pointer => {
-      if (this.defeated) return;
-      // the click that unlocks the browser's audio must not also fire a shot
-      if (!this.soundUnlocked) { this.soundUnlocked = true; return; }
+      if (this.defeated || this.userPaused) return;
       const a = Math.atan2(pointer.worldY - (this.player.y - 12), pointer.worldX - this.player.x);
       this.player.attack(a);
     });
-    this.input.keyboard.once('keydown', () => { this.soundUnlocked = true; });
 
     const cmd = (key, fn) => this.input.keyboard.on(`keydown-${key}`, fn);
     cmd('SPACE', () => { if (!this.defeated) this.player.swing(); });
@@ -107,10 +106,14 @@ export class BattleScene extends Phaser.Scene {
       this.toast(this.allies.some(a => a.alive) ? 'muskets empty — Q to make ready!' : 'no one left to fire…');
       return;
     }
-    if (!able.some(a => this.nearestEnemy(a, 880))) { this.toast('no targets in range'); return; }
+    // spread the volley: each ally aims at a DIFFERENT enemy when possible
+    const targets = this.enemies
+      .filter(e => e.alive && dist(e, this.player) < 880)
+      .sort((a, b) => dist(a, this.player) - dist(b, this.player));
+    if (!targets.length) { this.toast('no targets in range'); return; }
     this.announce('FIRE!');
     able.forEach((a, i) =>
-      this.time.delayedCall(i * 90, () => a.volley(this)));
+      this.time.delayedCall(i * 90, () => a.volleyAt(this, targets[i % targets.length])));
   }
 
   // -------------------------------------------------------------------------
@@ -227,6 +230,7 @@ export class BattleScene extends Phaser.Scene {
   // Main loop
   // -------------------------------------------------------------------------
   update(_, deltaMs) {
+    if (this.userPaused) return;
     const dt = Math.min(deltaMs / 1000, .05);
 
     const k = this.keys;
@@ -243,8 +247,12 @@ export class BattleScene extends Phaser.Scene {
     }
     this.assignFormationSlots();
     for (const a of this.allies) a.update(dt, this);
+    for (const b of this.battalions) b.update(dt);
+    this.battalions = this.battalions.filter(b => !b.dead);
     for (const e of this.enemies) e.update(dt, this);
     this.enemies = this.enemies.filter(e => !e.removed);
+    this.separateUnits();
+    this.updateGiant();
 
     this.updateCamera(dt);
     this.updateSky();
@@ -314,42 +322,102 @@ export class BattleScene extends Phaser.Scene {
 
     const danger = dangerAt(this.player.x);
     if (this.player.x < SAFE_EDGE + 100 || danger <= 0) return;
+    // the deep east belongs to the giant
+    if (this.giant?.alive || (this.player.x > 4300 && !this.giantDefeated)) return;
 
     const alive = this.enemies.filter(e => e.alive).length;
     const maxEnemies = Math.floor(1 + danger * 9);
     if (alive >= maxEnemies) return;
     if (Math.random() > .25 + danger * .4) return;
 
-    const pack = 1 + Math.floor(Math.random() * (1 + danger * 2.5));
-    for (let i = 0; i < Math.min(pack, maxEnemies - alive); i++) {
-      // enemies always come from the east — no ambushes from behind
-      const ex = clamp(this.player.x + 560 + Math.random() * 260,
-        SAFE_EDGE + 250, PLAY.right);
-      this.enemies.push(new Enemy(this, ex,
-        PLAY.top + Math.random() * (PLAY.bottom - PLAY.top),
-        this.pickEnemyType(dangerAt(ex))));
+    const band = this.enemyBand(danger);
+    const spawnX = () => clamp(this.player.x + 560 + Math.random() * 260,
+      SAFE_EDGE + 250, PLAY.right); // always from the east
+    const spawnY = () => PLAY.top + Math.random() * (PLAY.bottom - PLAY.top);
+
+    if (band[0] === 'battalion') {
+      // battalions arrive whole — one at a time, when there's room
+      if (!this.battalions.some(b => !b.dead) && alive + 4 <= maxEnemies + 2) {
+        this.battalions.push(new Battalion(this, spawnX(), spawnY()));
+        this.spawnT = 5;
+      }
+      return;
     }
 
-    // drop enemies the player has long outrun
+    const pack = 1 + Math.floor(Math.random() * (1 + danger * 2.5));
+    for (let i = 0; i < Math.min(pack, maxEnemies - alive); i++) {
+      this.enemies.push(new Enemy(this, spawnX(), spawnY(),
+        band[Math.floor(Math.random() * band.length)]));
+    }
+
+    // drop enemies the player has long outrun (never the boss)
     for (const e of this.enemies) {
-      if (e.alive && Math.abs(e.x - this.player.x) > 1700) {
+      if (e.alive && !e.isBoss && Math.abs(e.x - this.player.x) > 1700) {
         e.alive = false;
         e.destroy();
       }
     }
   }
 
-  // Harder types join the pool as the local danger rises; grunts thin out.
-  pickEnemyType(d) {
-    const pool = [['grunt', Math.max(.15, 1 - d)]];
-    if (d > .12) pool.push(['skirmisher', .4 + d * .4]);
-    if (d > .3)  pool.push(['runner', .35 + d * .4]);
-    if (d > .5)  pool.push(['marksman', .3 + d * .5]);
-    if (d > .7)  pool.push(['veteran', .2 + d * .6]);
-    const total = pool.reduce((sum, [, w]) => sum + w, 0);
-    let r = Math.random() * total;
-    for (const [k, w] of pool) { r -= w; if (r <= 0) return k; }
-    return 'grunt';
+  // The enemy escalation is SEQUENTIAL bands along the danger gradient:
+  // grunts -> skirmishers -> both -> battalions -> runners -> marksmen ->
+  // marksmen+runners -> veterans (and past them, the giant's ground).
+  enemyBand(d) {
+    if (d < .12) return ['grunt'];
+    if (d < .24) return ['skirmisher'];
+    if (d < .36) return ['grunt', 'skirmisher'];
+    if (d < .5)  return ['battalion'];
+    if (d < .62) return ['runner'];
+    if (d < .75) return ['marksman'];
+    if (d < .87) return ['marksman', 'runner'];
+    return ['veteran'];
+  }
+
+  // No superimposing: push overlapping units apart (circle vs circle).
+  separateUnits() {
+    const units = [this.player, ...this.allies, ...this.enemies].filter(u => u.alive);
+    for (let i = 0; i < units.length; i++) {
+      for (let j = i + 1; j < units.length; j++) {
+        const a = units[i], b = units[j];
+        const min = ((a.bodyR ?? 7) + (b.bodyR ?? 7)) * dscale((a.y + b.y) / 2);
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.hypot(dx, dy);
+        if (d >= min) continue;
+        if (d < .001) { b.x += 2; continue; }
+        const push = (min - d) / 2;
+        dx /= d; dy /= d;
+        a.x -= dx * push; a.y -= dy * push;
+        b.x += dx * push; b.y += dy * push;
+      }
+    }
+  }
+
+  // ---- the giant --------------------------------------------------------
+  updateGiant() {
+    if (!this.giant && !this.giantDefeated && this.player.x > 4350) {
+      this.giant = new Giant(this, Math.min(this.player.x + 650, PLAY.right - 60), 360);
+      this.enemies.push(this.giant);
+      this.announce('the ground shakes… THE GIANT WAKES!', '#e05252');
+    }
+  }
+
+  onGiantSlain() {
+    this.giantDefeated = true;
+    this.giant = null;
+    this.carried += 2000;
+    this.announce('THE GIANT FALLS! +2000 treasure — carry it home!', '#ffd35a');
+  }
+
+  throwRock(giant, target) {
+    const ds = dscale(giant.y);
+    const a = Math.atan2((target.y - 13 * dscale(target.y)) - (giant.y - 20 * ds), target.x - giant.x);
+    const img = this.add.image(giant.x, giant.y - 20 * ds, 'rock').setScale(ds * .9).setDepth(9000);
+    this.bullets.push({
+      x: giant.x, y: giant.y - 20 * ds,
+      vx: Math.cos(a) * 330, vy: Math.sin(a) * 330,
+      dmg: 24, life: 2.6, img, hostile: true,
+    });
+    sfx.sword(); // heave grunt stand-in
   }
 
   // -------------------------------------------------------------------------
@@ -466,10 +534,9 @@ export class BattleScene extends Phaser.Scene {
       this.clearedX = this.player.x;
       this.toast('area clear — it should stay quiet for a bit');
     }
-    // which song should be playing: battle > village > field.
-    // village music carries well past the palisade — departure starts
-    // sounding further east
-    const zone = near > 0 ? 'battle'
+    // which song should be playing: boss > battle > village > field.
+    const zone = (this.giant?.alive && dist(this.giant, this.player) < 1200) ? 'boss'
+      : near > 0 ? 'battle'
       : this.player.x < 950 ? 'village' : 'field';
     return { zone };
   }
@@ -481,6 +548,13 @@ export class BattleScene extends Phaser.Scene {
     const t = this.add.text(480, 150, msg, { fontSize: 26, color, fontStyle: 'bold' })
       .setOrigin(.5).setDepth(9500).setScrollFactor(0);
     this.tweens.add({ targets: t, y: 120, alpha: 0, duration: 1400, ease: 'Cubic.easeOut', onComplete: () => t.destroy() });
+  }
+
+  enemyShout(unit, msg) {
+    if (!unit) return;
+    const t = this.add.text(unit.x, unit.y - 52, msg, { fontSize: 15, color: '#ff9a8a', fontStyle: 'bold' })
+      .setOrigin(.5).setDepth(9500);
+    this.tweens.add({ targets: t, y: t.y - 20, alpha: 0, duration: 1300, onComplete: () => t.destroy() });
   }
 
   toast(msg) {
@@ -594,6 +668,8 @@ export class BattleScene extends Phaser.Scene {
     soldier('enemy_marksman_up', 0x6e2f5e, 0xc79ab8, 'rifle', 'up');
     soldier('enemy_veteran', 0x2a2a30, 0xd9b45a, 'sword', 'side');
     soldier('enemy_veteran_up', 0x2a2a30, 0xd9b45a, 'sword', 'up');
+    soldier('enemy_battalion', 0xa8452f, 0xe8e3d0, 'rifle', 'side');
+    soldier('enemy_battalion_up', 0xa8452f, 0xe8e3d0, 'rifle', 'up');
 
     let g = this.make.graphics({ add: false });
     g.fillStyle(0x000000); g.fillEllipse(10, 4, 20, 8);
@@ -623,6 +699,16 @@ export class BattleScene extends Phaser.Scene {
     g = this.make.graphics({ add: false });
     g.fillStyle(0xffffff); g.fillTriangle(6, 0, 0, 7, 6, 14); g.fillTriangle(6, 0, 12, 7, 6, 14);
     g.generateTexture('artifact', 12, 14); g.destroy();
+
+    // the giant: a hulking silhouette with a club
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x6a705c); g.fillRect(8, 8, 18, 22);        // massive torso
+    g.fillStyle(0x7a8069); g.fillRect(11, 0, 12, 10);       // head
+    g.fillStyle(0x4a4f40); g.fillRect(12, 3, 10, 3);        // brow
+    g.fillStyle(0x6a705c); g.fillRect(4, 10, 5, 14); g.fillRect(25, 10, 5, 14); // arms
+    g.fillStyle(0x5a4632); g.fillRect(28, 2, 5, 20);        // club
+    g.fillStyle(0x3d4034); g.fillRect(10, 30, 6, 10); g.fillRect(19, 30, 6, 10); // legs
+    g.generateTexture('enemy_giant', 34, 40); g.destroy();
 
     const house = (key, w, h, wall, roof) => {
       const gr = this.make.graphics({ add: false });

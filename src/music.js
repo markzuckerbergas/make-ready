@@ -23,16 +23,16 @@ import { initStrudel } from '@strudel/web';
 const CPS = .5;            // @strudel/web scheduler default (120 BPM @ 4/cycle)
 const SLOW = 1.25;         // slows the whole stack to 96 BPM
 const RATE = CPS / SLOW;   // song-cycles per second (one cycle = 2.5 s)
-const LEN = { village: 16, field: 16, battle: 56 };
+const LEN = { village: 16, field: 16, battle: 56, boss: 16 };
 
 class MusicDirector {
   constructor() {
-    this.w = { village: 1, field: 0, battle: 0 };          // crossfade weights
+    this.w = { village: 1, field: 0, battle: 0, boss: 0 }; // crossfade weights
     this.zone = 'village';
     this.pending = null;
     this.commitAt = null;
-    this.off = { village: 0, field: null, battle: null };  // playhead offsets
-    this.pos = { village: 0, field: 0, battle: 0 };        // parked playheads
+    this.off = { village: 0, field: null, battle: null, boss: null }; // playhead offsets
+    this.pos = { village: 0, field: 0, battle: 0, boss: 0 }; // parked playheads
     this.startedAt = null;
     this.started = false;
     this.userVol = .6;   // page slider; default keeps overall level modest
@@ -50,21 +50,29 @@ class MusicDirector {
     }));
   }
 
-  attach(scene) {
-    if (this.started) return;
-    const start = () => this.start();
-    scene.input.once('pointerdown', start);
-    scene.input.keyboard.once('keydown', start);
-  }
-
   async start() {
     if (this.started) return;
     this.started = true;
     await this.ready;
     this.startedAt = performance.now();
     this.rebuild();
-    this.watchVisibility();
     this.startMeter();
+  }
+
+  // A true pause: suspending the AudioContext freezes its clock, and
+  // Strudel's scheduler with it. Our playhead clock shifts by the paused
+  // duration on resume so everything stays aligned.
+  pause() {
+    if (!this.started || this.pausedAt !== null) return;
+    this.pausedAt = performance.now();
+    globalThis.getAudioContext?.()?.suspend();
+  }
+
+  resume() {
+    if (this.pausedAt === null) return;
+    this.startedAt += performance.now() - this.pausedAt;
+    this.pausedAt = null;
+    globalThis.getAudioContext?.()?.resume();
   }
 
   setDefeated(v) { this.defeated = v; }
@@ -85,7 +93,8 @@ class MusicDirector {
         const now = this.nowCycles();
         // any transition involving battle is urgent — next whole cycle;
         // village<->field wait for the 4-cycle grid so harmony lines up
-        const grid = (want === 'battle' || this.zone === 'battle') ? 1 : 4;
+        const urgent = z => z === 'battle' || z === 'boss';
+        const grid = (urgent(want) || urgent(this.zone)) ? 1 : 4;
         this.commitAt = Math.ceil(now / grid) * grid;
       }
       if (this.nowCycles() >= this.commitAt - .02) this.commit(want);
@@ -95,9 +104,9 @@ class MusicDirector {
     }
 
     // battle enters and leaves faster than the calm songs swap
-    const IN = { village: .4, field: .4, battle: .55 };
-    const OUT = { village: .3, field: .3, battle: .5 };
-    for (const k of ['village', 'field', 'battle']) {
+    const IN = { village: .4, field: .4, battle: .55, boss: .55 };
+    const OUT = { village: .3, field: .3, battle: .5, boss: .5 };
+    for (const k of ['village', 'field', 'battle', 'boss']) {
       const target = k === this.zone ? 1 : 0;
       const rate = target ? IN[k] : OUT[k];
       const d = target - this.w[k];
@@ -113,7 +122,7 @@ class MusicDirector {
       this.pos[leaving] = ((T - this.off[leaving]) % LEN[leaving] + LEN[leaving]) % LEN[leaving];
     }
     // battle is a ramp: always from the alarm. Others resume, grid-snapped.
-    const p = zone === 'battle' ? 0
+    const p = (zone === 'battle' || zone === 'boss') ? 0
       : (Math.floor((this.pos[zone] ?? 0) / 4) * 4) % LEN[zone];
     this.off[zone] = T - p;
     this.zone = zone;
@@ -134,26 +143,9 @@ class MusicDirector {
         .postgain(signal(() => w.field * .85 * vol())),
       buildBattle().late(this.off.battle ?? 0)
         .postgain(signal(() => w.battle * .6 * vol())),
+      buildBoss().late(this.off.boss ?? 0)
+        .postgain(signal(() => w.boss * .6 * vol())),
     ).slow(SLOW).analyze(1).play();
-  }
-
-  // Tab hidden -> suspend the whole audio engine (a true pause: the pattern
-  // clock freezes). Resume shifts our playhead clock by the paused duration.
-  watchVisibility() {
-    document.addEventListener('visibilitychange', () => {
-      if (!this.started) return;
-      const ctx = globalThis.getAudioContext?.();
-      if (document.hidden) {
-        if (this.pausedAt === null) {
-          this.pausedAt = performance.now();
-          ctx?.suspend();
-        }
-      } else if (this.pausedAt !== null) {
-        this.startedAt += performance.now() - this.pausedAt;
-        this.pausedAt = null;
-        ctx?.resume();
-      }
-    });
   }
 
   // VU meter on the page, fed by the stack's analyser
@@ -309,6 +301,26 @@ function buildBattle() {
     [8, stack(lhEye, rhEye, drumsEye)],
     [8, stack(lhDrive, rhTheme, rhHigh, ostinato, bassSaw, drumsSurge)],
     [8, stack(bassSaw, ostinato, drumsCore, rhFar)],
+  );
+}
+
+// The giant's music: slow menace on a tritone (F against Gb), stomping
+// half-time drums — nothing like the human songs.
+function buildBoss() {
+  const { note, sound, stack, arrange, rand } = globalThis;
+  const stomp = sound('bassdrum1 ~ ~ [~ bassdrum1]').n(7)
+    .speed(rand.range(.88, .98)).gain(1.5);
+  const timp = sound('<timpani:17 ~ timpani:19 ~>').gain(.9);
+  const bass = note('<[f1 ~ gb1 ~] [f1 ~ e1 ~]>/2')
+    .sound('sawtooth').lpf(380).gain(.55);
+  const growl = note('f1').struct('x*16').sound('sawtooth').lpf(200).gain(.22);
+  const piano = note('<[f4 ~ gb4 ~] [~ e4 ~ f4]>/2')
+    .sound('piano').room(.3).gain(.5);
+  const roll = sound('snare_low*16').n(11).gain('[.2 .12 .15 .12]*4');
+  const cym = sound('<sus_cymbal ~ ~ ~>').gain(.25);
+  return arrange(
+    [8, stack(stomp, timp, bass, growl, piano)],
+    [8, stack(stomp, timp, bass, growl, piano, roll, cym)],
   );
 }
 
