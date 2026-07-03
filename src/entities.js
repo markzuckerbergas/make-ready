@@ -276,8 +276,10 @@ export class Ally extends Unit {
       }
     } else {
       const enemy = scene.nearestEnemy(this, 780);
-      // fire-at-will holds its ground — only formation modes track the player
-      if (!this.readied && this.mode !== 'free') {
+      // fire-at-will holds its ground — formation modes march to their slot
+      // even while readied: you brace AT the line, not where the order
+      // caught you
+      if (this.mode !== 'free') {
         this.moveToward(this.targetSlot.x, this.targetSlot.y, dt);
       }
       if (enemy) this.facing = enemy.x > this.x ? 1 : -1;
