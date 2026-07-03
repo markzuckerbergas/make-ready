@@ -1,21 +1,12 @@
 import { initStrudel } from '@strudel/web';
 
 // ---------------------------------------------------------------------------
-// MusicDirector v4 — the FULL compositions, joined by COMPOSED BRIDGES.
+// MusicDirector v5 — the FULL compositions, crossfaded on the phrase grid.
 //
-// No crossfades. The timeline is cut into exact segments on the cycle grid:
-//
-//   [ song A ... )[ bridge A->B )[ ... song B resumes where it left off ]
-//                 t0             t1
-//
-// Every layer is gated by signal(t => ...) — t is pattern time, so the cuts
-// are exact, not eased. Bridges are STITCHED per transition: an exit half
-// picked by where the outgoing song stands (a hot battle section leaves
-// differently than the eye; the village outro leaves differently than its
-// climax) + an entry half picked by where the incoming song resumes (the
-// field's "unknown" float gets a floating entry, its ridge a timpani climb).
-// Harmonic glue: calm exits end on Cm ground, battle entries walk down to
-// C — the dominant of battle's F minor; stand-downs climb back i->v.
+// Zone changes COMMIT on the outgoing song's phrase grid (4 cycles calm,
+// 1 cycle when battle/boss is involved), then postgain faders ease the two
+// songs across each other — beat-locked, and grid alignment keeps the
+// shared Cm/Ab loop consonant during calm crossfades.
 //
 // Playheads: village & field resume (snapped to the 4-cycle phrase grid);
 // battle & boss always enter from the top — their openings are the ramp.
@@ -35,8 +26,10 @@ const urgent = z => z === 'battle' || z === 'boss';
 
 class MusicDirector {
   constructor() {
-    this.cur = 'village';
-    this.trans = null;   // { from, to, t0, end } while a bridge is scheduled
+    this.zone = 'village';
+    this.w = { village: 1, field: 0, battle: 0, boss: 0 }; // crossfade weights
+    this.pending = null;
+    this.commitAt = null;
     this.off = { village: 0, field: null, battle: null, boss: null };
     this.pos = { village: 0, field: 0, battle: 0, boss: 0 };
     this.ctxAnchor = null;  // AudioContext time at play start — SAME clock as
@@ -97,69 +90,62 @@ class MusicDirector {
   update(dt, snap) {
     if (!this.started || this.ctxAnchor === null || this.paused) return;
     const now = this.nowCycles();
-
-    // a finished bridge is pure bookkeeping — the running pattern already
-    // encodes the whole timeline
-    if (this.trans && now >= this.trans.end) {
-      this.cur = this.trans.to;
-      this.trans = null;
-    }
-    if (this.trans) return; // one transition at a time
-
     const want = this.defeated ? 'village' : snap.zone;
     if (want !== this.lastWant) { this.lastWant = want; this.wantSince = now; }
-    if (want === this.cur) return;
-    // hysteresis: a zone must PERSIST before we spend a bridge on it, and
-    // transitions get a short cooldown — no bridge ping-pong at a boundary
-    const dwell = urgent(want) ? .35 : 1.2; // in cycles (~0.9s / 3s)
-    if (now - this.wantSince < dwell || now < this.nextTransOk) return;
 
-    // schedule: cut on the OUTGOING SONG'S phrase grid (its local frame —
-    // global time only aligns with its phrases while off[cur] % 4 == 0),
-    // play the bridge, then the new song
-    const grid = (urgent(want) || urgent(this.cur)) ? 1 : 4;
-    const base = this.off[this.cur] ?? 0;
-    const t0 = base + Math.ceil((now - base + .05) / grid) * grid;
-    const len = urgent(want) ? 2 : 4; // into combat fast, out of it gently
-    const t1 = t0 + len;
-    this.nextTransOk = t1 + 2;
+    if (want !== this.zone) {
+      // hysteresis: a zone must persist before we act on it
+      const dwell = urgent(want) ? .35 : 1.2; // in cycles (~0.9s / 3s)
+      if (now - this.wantSince >= dwell) {
+        if (this.pending !== want) {
+          this.pending = want;
+          // commit on the OUTGOING song's phrase grid (its local frame)
+          const grid = (urgent(want) || urgent(this.zone)) ? 1 : 4;
+          const base = this.off[this.zone] ?? 0;
+          this.commitAt = base + Math.ceil((now - base + .05) / grid) * grid;
+        }
+        if (now >= this.commitAt - .02) this.commit(want);
+      }
+    } else {
+      this.pending = null;
+      this.commitAt = null;
+    }
 
-    this.pos[this.cur] = this.off[this.cur] === null ? 0
-      : ((t0 - this.off[this.cur]) % LEN[this.cur] + LEN[this.cur]) % LEN[this.cur];
-    const p = urgent(want) ? 0
-      : (Math.floor((this.pos[want] ?? 0) / 4) * 4) % LEN[want];
-    this.off[want] = t1 - p;
-
-    this.trans = {
-      from: this.cur, to: want, t0, end: t1,
-      fromPos: this.pos[this.cur], toPos: p,
-    };
-    this.rebuild();
+    // battle enters and leaves faster than the calm songs swap
+    const IN = { village: .4, field: .4, battle: .55, boss: .55 };
+    const OUT = { village: .3, field: .3, battle: .5, boss: .5 };
+    for (const k of SONGS) {
+      const target = k === this.zone ? 1 : 0;
+      const rate = target ? IN[k] : OUT[k];
+      const d = target - this.w[k];
+      const step = rate * dt;
+      this.w[k] = Math.abs(d) <= step ? target : this.w[k] + Math.sign(d) * step;
+    }
   }
 
-  // Encode the whole segment timeline into gate signals of pattern time —
-  // one rebuild per transition, and the cuts land exactly on the grid.
+  commit(zone) {
+    const T = this.commitAt ?? this.nowCycles();
+    const leaving = this.zone;
+    if (this.off[leaving] !== null) {
+      this.pos[leaving] = ((T - this.off[leaving]) % LEN[leaving] + LEN[leaving]) % LEN[leaving];
+    }
+    // battle/boss are ramps: always from the top. Others resume, grid-snapped.
+    const p = urgent(zone) ? 0
+      : (Math.floor((this.pos[zone] ?? 0) / 4) * 4) % LEN[zone];
+    this.off[zone] = T - p;
+    this.zone = zone;
+    this.pending = null;
+    this.commitAt = null;
+    this.rebuild(); // in-phase hot swap; the entering song is ~silent right now
+  }
+
   rebuild() {
     const { stack, signal } = globalThis;
     const vol = () => this.userVol;
-    const from = this.trans?.from ?? this.cur;
-    const to = this.trans?.to ?? null;
-    const t0 = this.trans?.t0 ?? Infinity;
-    const t1 = this.trans?.end ?? Infinity;
-
-    const gate = k => signal(t =>
-      ((k === from && t < t0) || (k === to && t >= t1)) ? MASTER[k] * vol() : 0);
-
-    const layers = SONGS.map(k =>
-      BUILDERS[k]().late(this.off[k] ?? 0).postgain(gate(k)));
-
-    if (this.trans) {
-      layers.push(
-        buildBridge(from, to, this.trans.fromPos, this.trans.toPos).late(t0)
-          .postgain(signal(t => (t >= t0 && t < t1) ? vol() : 0)),
-      );
-    }
-    stack(...layers).slow(SLOW).analyze(1).play();
+    stack(...SONGS.map(k =>
+      BUILDERS[k]().late(this.off[k] ?? 0)
+        .postgain(signal(() => this.w[k] * MASTER[k] * vol())),
+    )).slow(SLOW).analyze(1).play();
   }
 
   // VU meter on the page, fed by the stack's analyser
@@ -182,170 +168,6 @@ class MusicDirector {
     };
     requestAnimationFrame(tick);
   }
-}
-
-// ---------------------------------------------------------------------------
-// The bridges — stitched per transition from an EXIT half (chosen by where
-// the outgoing song IS) and an ENTRY half (chosen by where the incoming song
-// RESUMES). Calm bridges are 2+2 cycles; combat/boss entries are 1+1.
-// Different moments produce different bridges — the seam is composed for the
-// two specific timeframes it joins.
-// ---------------------------------------------------------------------------
-
-function buildBridge(from, to, fromPos = 0, toPos = 0) {
-  const { arrange } = globalThis;
-  if (urgent(to)) {
-    return arrange([1, exitQuick(from, fromPos)], [1, to === 'boss' ? entryBoss() : entryBattle()]);
-  }
-  return arrange([2, exitHalf(from, fromPos)], [2, entryHalf(to, toPos)]);
-}
-
-// which exit fits where the outgoing song stands right now
-function exitHalf(from, pos) {
-  if (from === 'battle') {
-    // eye (32-40) and the alarm (0-16) are cold; clash/final burn hot
-    const hot = (pos >= 16 && pos < 32) || (pos >= 40 && pos < 56);
-    return hot ? exitBattleHot() : exitBattleCold();
-  }
-  if (from === 'boss') return exitBoss();
-  if (from === 'village') {
-    const soft = pos < 8 || pos >= 44; // intro/outro
-    return soft ? exitCalmSoft() : exitCalmRun();
-  }
-  // field: the "unknown" float (16-24) leaves quietly, the rest at a walk
-  return (pos >= 16 && pos < 24) ? exitCalmSoft() : exitCalmRun();
-}
-
-function entryHalf(to, pos) {
-  if (to === 'village') return entryVillage(pos >= 16 && pos < 44); // sparkle era?
-  // field: where are we rejoining the journey?
-  if (pos >= 16 && pos < 24) return entryFieldFloat();
-  if (pos >= 24 && pos < 32) return entryFieldClimb();
-  return entryFieldRoad();
-}
-
-// ---- exit halves (2 cycles) -------------------------------------------------
-function exitCalmSoft() {
-  const { note, stack } = globalThis;
-  return stack(
-    note('<[c3 ~ g3 ~] [c3 ~ ~ ~]>').sound('piano').room(.2).gain(.5),
-    note('<[g4 f4 eb4 ~] [eb4 ~ d4 ~]>').sound('piano').room(.3).gain(.5),
-  );
-}
-
-function exitCalmRun() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('<[[c3 g3 eb3 g3]*2] [c3 g3 eb3 g3]>').sound('piano').gain('[.55 .42 .48 .42]*2'),
-    note('<[eb4 d4 bb3 g3] [c4 d4 eb4 f4]>').sound('piano').room(.2).gain(.55),
-    sound('<[framedrum:12 ~ framedrum:13 ~] [framedrum:12 ~ ~ ~]>').gain(.55),
-  );
-}
-
-function exitBattleHot() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('<[f1 f1 f1 f1] [f1 ~ f1 ~]>').sound('sawtooth').lpf(500).gain(.45),
-    note('<[ab3 ~ g3 ~] [f3 ~ ~ ~]>').sound('piano').room(.25).gain(.55),
-    sound('<[bassdrum1:6 ~ bassdrum1:5 ~] [bassdrum1:6 ~ ~ ~]>').gain(1),
-    sound('<[[snare_low:18*4] snare_low:19 ~ ~] [~ ~ snare_low:15 ~]>').gain(.7),
-  );
-}
-
-function exitBattleCold() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('<[f1 ~ ~ ~] [f1 ~ c2 ~]>').sound('sawtooth').lpf(400).gain(.4),
-    note('<[ab3 ~ g3 ~] [f3 ~ eb3 ~]>').sound('piano').room(.35).gain(.5),
-    sound('<[bassdrum1:5 ~ ~ ~] [bassdrum1:5 ~ ~ ~]>').gain(.7),
-    sound('<~ [~ ~ snare_low:13 ~]>').gain(.4),
-  );
-}
-
-function exitBoss() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('<[f1 ~ gb1 ~] [f1 ~ ~ ~]>').sound('sawtooth').lpf(300).gain(.45),
-    sound('<[bassdrum1:7 ~ ~ ~] [~ ~ bassdrum1:5 ~]>').gain(1.1),
-    sound('<[snare_low:11*8] [snare_low:9*8]>').gain('[.18 .1]*4'),
-  );
-}
-
-// ---- entry halves (2 cycles) --------------------------------------------------
-function entryVillage(withSparkle) {
-  const { note, stack } = globalThis;
-  const base = stack(
-    note('<[c3 ~ g3 ~] [c3 g3 c4 g3]>').sound('piano').room(.15).gain(.5),
-    note('<[~ ~ d4 eb4] [g4 ~ [d4 eb4] ~]>').sound('piano').room(.25).gain(.5),
-  );
-  if (!withSparkle) return base;
-  return stack(base,
-    note('<~ [eb5 ~ d5 ~]>').sound('piano').room(.45).gain(.12));
-}
-
-function entryFieldRoad() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('<[c3 g3 eb3 g3] [[c3 g3 eb3 g3]*2]>').sound('piano').gain('[.5 .4 .45 .4]*2'),
-    note('<[~ eb4 f4 g4] [g4 f4 [g4 bb4] ~]>').sound('piano').room(.2).gain(.55),
-    sound('<[~ ~ framedrum:12 ~] [framedrum:12 framedrum:14 [framedrum:15 framedrum:15] [framedrum:16 framedrum:16]]>')
-      .gain(.65),
-  );
-}
-
-function entryFieldFloat() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('<[ab2 eb3 ab3 c4] [bb2 f3 ab3 db4]>').sound('piano').room(.3).gain(.5),
-    note('<[c5 ~ ~ ~] [~ ~ bb4 ~]>').sound('piano').room(.4).gain(.45),
-    sound('<sus_cymbal ~>').gain(.18),
-  );
-}
-
-function entryFieldClimb() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('<[c4 eb4 f4 ~] [f4 g4 ab4 ~]>').sound('piano').room(.2).gain(.55),
-    note('<[f2 ~ c3 ~] [f2 c3 f3 ab3]>').sound('piano').room(.15).gain(.5),
-    sound('<[timpani:4 ~ ~ ~] [~ ~ timpani:9 ~]>').gain(.55),
-    sound('<~ [shaker_small*8]>').gain('[.25 .15]*4'),
-  );
-}
-
-// ---- urgent halves (1 cycle each) ---------------------------------------------
-function exitQuick(from, pos) {
-  const { note, sound, stack } = globalThis;
-  if (from === 'battle' || from === 'boss') {
-    return stack(
-      note('[f1 f1 [f1 f1] ~]').sound('sawtooth').lpf(450).gain(.45),
-      sound('[bassdrum1:6 ~ bassdrum1:7 ~]').gain(1),
-    );
-  }
-  // calm exit, one bar: the melody stops mid-step
-  return stack(
-    note('[eb4 d4 c4 ~]').sound('piano').room(.2).gain(.55),
-    note('[c3 ~ g2 ~]').sound('piano').gain(.5),
-  );
-}
-
-function entryBattle() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('[c2 c2 bb1 [ab1 g1]]').sound('sawtooth').lpf(500).gain(.5),
-    note('[c4 ~ b3 c4]').sound('piano').room(.2).gain(.6),
-    sound('[~ [snare_low:17*4] snare_low:18 [snare_low:19*4]]').gain(.8),
-    sound('[~ ~ bassdrum1:6 ~]').gain(1),
-    sound('[~ ~ ~ timpani_roll:4]').gain(.5),
-  );
-}
-
-function entryBoss() {
-  const { note, sound, stack } = globalThis;
-  return stack(
-    note('[gb1 gb1 f1 f1]').sound('sawtooth').lpf(300).gain(.5),
-    sound('[bassdrum1:7 ~ bassdrum1:7 bassdrum1:7]').gain(1.3),
-    sound('timpani_roll:5').gain(.6),
-  );
 }
 
 // ---------------------------------------------------------------------------

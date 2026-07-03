@@ -56,10 +56,15 @@ export class BattleScene extends Phaser.Scene {
       'W,A,S,D,UP,LEFT,DOWN,RIGHT,SPACE,R,Q,E,X,TAB,ONE,TWO,THREE,FOUR,ENTER');
     this.input.keyboard.addCapture('SPACE,UP,DOWN,LEFT,RIGHT,TAB');
 
+    this.input.mouse?.disableContextMenu();
     this.input.on('pointerdown', pointer => {
       if (this.defeated || this.userPaused) return;
+      if (pointer.rightButtonDown()) { this.player.aiming = true; return; }
       const a = Math.atan2(pointer.worldY - (this.player.y - 12), pointer.worldX - this.player.x);
       this.player.attack(a);
+    });
+    this.input.on('pointerup', pointer => {
+      if (pointer.rightButtonReleased()) this.player.aiming = false;
     });
 
     const cmd = (key, fn) => this.input.keyboard.on(`keydown-${key}`, fn);
@@ -67,13 +72,9 @@ export class BattleScene extends Phaser.Scene {
     cmd('R', () => { if (!this.defeated) this.player.reload(); });
     cmd('X', () => { if (!this.defeated) this.player.switchWeapon(); });
     cmd('TAB', () => { if (!this.defeated) this.player.switchWeapon(); });
-    cmd('ONE', () => {
-      if (this.player.moving) { this.toast('hold still to form a line'); return; }
-      this.command('line', 'FORM LINE!');
-    });
-    cmd('TWO', () => this.command('behind', 'BEHIND ME!'));
-    cmd('THREE', () => this.command('free', 'FIRE AT WILL!'));
-    cmd('FOUR', () => this.command('charge', 'CHAAARGE!'));
+    cmd('ONE', () => this.command('behind', 'BEHIND ME!'));
+    cmd('TWO', () => this.command('free', 'FIRE AT WILL!'));
+    cmd('THREE', () => this.command('charge', 'CHAAARGE!'));
     cmd('Q', () => this.makeReady());
     cmd('E', () => this.volley());
     cmd('ENTER', () => {
@@ -90,16 +91,22 @@ export class BattleScene extends Phaser.Scene {
     this.announce(shout);
   }
 
-  // MAKE READY is the whole drill in one order: everyone reloads (including
-  // the player, if the rifle is in hand) and the allies brace for a volley.
+  // MAKE READY is the whole drill in one order: standing still forms the
+  // line, everyone reloads (you too — the rifle comes up if the sword is
+  // out), and the allies brace for a volley.
   makeReady() {
     if (this.defeated) return;
     let any = false;
     for (const a of this.allies) {
-      if (a.alive && a.mode !== 'charge') { a.readied = true; a.orderReload(); any = true; }
+      if (a.alive && a.mode !== 'charge') {
+        if (!this.player.moving) a.mode = 'line';
+        a.readied = true;
+        a.orderReload();
+        any = true;
+      }
     }
-    if (this.player.alive && this.player.weapon === 'rifle') this.player.reload();
-    if (any) this.announce('MAKE READY!');
+    if (this.player.alive) this.player.reload();
+    if (any) this.announce(this.player.moving ? 'MAKE READY!' : 'FORM LINE — MAKE READY!');
   }
 
   volley() {
@@ -593,7 +600,8 @@ export class BattleScene extends Phaser.Scene {
     const p = this.player;
     const rifle = p.loaded ? 'LOADED'
       : p.reloadT > 0 ? `reloading ${Math.max(0, p.reloadT).toFixed(1)}s` : 'EMPTY — press R';
-    const arm = p.weapon === 'rifle' ? `rifle in hand (${rifle})` : `sword in hand · rifle: ${rifle}`;
+    const steady = p.steady() ? ' · STEADY' : p.aiming && p.weapon === 'rifle' ? ' · aiming…' : '';
+    const arm = p.weapon === 'rifle' ? `rifle in hand (${rifle})${steady}` : `sword in hand · rifle: ${rifle}`;
     const mode = this.allies.find(a => a.alive)?.mode ?? '-';
     const readied = this.allies.some(a => a.alive && a.readied) ? ' · READIED' : '';
     const reloading = this.allies.some(a => a.alive && !a.loaded && a.reloadT > 0) ? ' · reloading…' : '';

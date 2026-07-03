@@ -25,20 +25,20 @@ the world.
 | WASD / arrows | move (facing follows your movement) |
 | **X** / TAB | switch weapon — stow the rifle, draw the sword (takes a moment) |
 | click | attack with the weapon in hand (rifle aims at the cursor) |
-| **R** | reload the Martini-Henry (single shot, slow reload) |
-| SPACE | sword swing — strikes **the direction you're facing** |
+| hold right-click | **steady aim** — after a beat your shot flies far truer |
+| **R** | reload — brings the rifle up first if the sword is out |
+| SPACE | sword swing toward your facing — draws the sword if stowed |
 
 Commands to your two allies — formations are **relative to your facing**
 (facing north, "behind me" is south of you):
 
 | Key | Order | Effect |
 |---|---|---|
-| **Q** | MAKE READY | everyone reloads (you too, rifle in hand) and allies brace |
-| **E** | FIRE! | volley — **readied volleys get bonus accuracy & damage** |
-| **1** | FORM LINE | firing line abreast of you — only holds while you stand still |
-| **2** | BEHIND ME | (default) they cover from your back |
-| **3** | FIRE AT WILL | hold current position and keep shooting; wildest aim, self-reloading |
-| **4** | CHARGE | swords out, run the enemy down |
+| **Q** | MAKE READY | stand still to form the line; everyone reloads and braces |
+| **E** | FIRE! | volley — **a readied volley shoots far truer** |
+| **1** | BEHIND ME | (default) they cover from your back |
+| **2** | FIRE AT WILL | hold position, keep shooting; wildest aim, self-reloading |
+| **3** | CHARGE | swords out, run the enemy down |
 
 The drill is real: after a volley the muskets stay **empty** until you order
 MAKE READY. Q → E is the rhythm of the line.

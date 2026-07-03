@@ -111,6 +111,10 @@ export class Player extends Unit {
     this.swordCd = 0;
     this.faceX = 1; this.faceY = 0; // facing vector (last committed direction)
     this.moving = false;
+    this.pendingSwing = false;   // SPACE pressed while the sword was stowed
+    this.pendingReload = false;  // R pressed while the sword was out
+    this.aiming = false;         // right mouse held
+    this.steadyT = 0;            // how long the aim has been held steady
     this.pendingDir = null;  // candidate facing (octant key)
     this.pendingT = 0;       // how long it's been held
   }
@@ -148,9 +152,19 @@ export class Player extends Unit {
       if (this.reloadT <= 0) { this.loaded = true; sfx.reloadDone(); this.scene.toast('rifle loaded'); }
     }
     if (this.switchT > 0) this.switchT -= dt;
+    // finish deferred intents once the weapon switch lands
+    if (this.switchT <= 0) {
+      if (this.pendingSwing && this.weapon === 'sword') { this.pendingSwing = false; this.swing(); }
+      if (this.pendingReload && this.weapon === 'rifle') { this.pendingReload = false; this.reload(); }
+    }
+    // steady aim: hold right-click with the rifle up (standing helps you hold it)
+    this.steadyT = (this.aiming && this.weapon === 'rifle' && this.switchT <= 0)
+      ? this.steadyT + dt : 0;
     this.swordCd = Math.max(0, this.swordCd - dt);
     this.updateVisual(dt);
   }
+
+  steady() { return this.steadyT > .5; }
 
   faceAngle() { return Math.atan2(this.faceY, this.faceX); }
 
@@ -174,26 +188,35 @@ export class Player extends Unit {
     if (this.weapon === 'rifle') {
       if (!this.loaded) { this.scene.toast(this.reloadT > 0 ? 'reloading…' : 'click! — R to reload'); return; }
       this.loaded = false;
-      // one shot, one kill — and a Martini-Henry carries: ~1700px of flight
-      this.scene.shoot(this, pointerAngle, 2.5, 999, false, 1.8);
+      // one shot, one kill — steadied aim (hold right-click) shoots far truer
+      this.scene.shoot(this, pointerAngle, this.steady() ? 1 : 2.5, 999, false, 1.8);
+      this.steadyT = 0;
     } else {
       this.swing();
     }
   }
 
   swing() {
-    if (!this.alive || this.switchT > 0 || this.weapon !== 'sword') {
-      if (this.weapon !== 'sword') this.scene.toast('draw your sword first (X)');
+    if (!this.alive) return;
+    if (this.weapon !== 'sword') {
+      // panic button: start drawing and swing the moment it's out
+      if (this.switchT <= 0) this.switchWeapon();
+      this.pendingSwing = true;
       return;
     }
-    if (this.swordCd > 0) return;
+    if (this.switchT > 0 || this.swordCd > 0) return;
     this.swordCd = .45;
     this.scene.melee(this, this.faceAngle(), 48, 32); // swings where you FACE
   }
 
   reload() {
-    if (!this.alive || this.switchT > 0) return;
-    if (this.weapon !== 'rifle') { this.scene.toast('rifle is on your back (X)'); return; }
+    if (!this.alive) return;
+    if (this.weapon !== 'rifle') {
+      if (this.switchT <= 0) this.switchWeapon();
+      this.pendingReload = true;
+      return;
+    }
+    if (this.switchT > 0) return;
     if (!this.loaded && this.reloadT <= 0) {
       this.reloadT = this.reloadTime;
       sfx.reloadStart();
@@ -262,7 +285,7 @@ export class Ally extends Unit {
         this.orderReload(); // fire-at-will soldiers reload themselves
         if (enemy && this.loaded && this.fireCd <= 0) {
           this.fireCd = .4 + Math.random() * .6;
-          this.shoot(scene, enemy, 11, 38); // wildest fire in the game
+          this.shoot(scene, enemy, 11, 999); // one-shot, but the wildest aim
         }
       }
     }
@@ -279,8 +302,8 @@ export class Ally extends Unit {
   volleyAt(scene, target) {
     const t = target?.alive ? target : scene.nearestEnemy(this, 880);
     if (this.alive && this.loaded && t) {
-      // MAKE READY -> FIRE pays off: tighter spread, harder hit
-      this.shoot(scene, t, this.readied ? 1.5 : 6, this.readied ? 58 : 40);
+      // every ball kills — MAKE READY buys ACCURACY, not damage
+      this.shoot(scene, t, this.readied ? 1.5 : 6, 999);
     }
   }
 }
