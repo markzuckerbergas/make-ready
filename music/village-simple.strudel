@@ -1,0 +1,24 @@
+// VILLAGE — SIMPLE (16-cycle loop, the version the game plays).
+// Two sections: theme, then theme + sparkle. Fewer layers = cleaner crossfades.
+
+setcpm(96/4)
+
+const MASTER = 1
+
+const lhA = note("<[c3 g3 c4 g3]*2 [ab2 eb3 ab3 eb3]*2>/2")
+  .sound("piano").room(.1).gain(.55)
+
+const rhTheme = note(`<
+  [[eb4 d4 bb3 g3]!3 [g4 f4 d4 bb3]]
+  [[c4 bb3 ab3 eb3]!3 [eb4 d4 c4 g3]]
+>/2`).sound("piano").room(.15).gain("[.72 .5 .6 .52]*4")
+
+const sparkle = note(`<
+  [[eb5 d5 bb4 g4]!3 [g5 f5 d5 bb4]]
+  [[c5 bb4 ab4 eb4]!3 [eb5 d5 c5 g4]]
+>/2`).sound("gm_celesta").room(.45).gain(.15)
+
+arrange(
+  [8, stack(lhA, rhTheme)],
+  [8, stack(lhA, rhTheme, sparkle)],
+).postgain(MASTER)

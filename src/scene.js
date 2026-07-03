@@ -467,9 +467,11 @@ export class BattleScene extends Phaser.Scene {
       this.clearedX = this.player.x;
       this.toast('area clear — it should stay quiet for a bit');
     }
-    // which song should be playing: battle > village > field
+    // which song should be playing: battle > village > field.
+    // village music carries well past the palisade — departure starts
+    // sounding further east
     const zone = near > 0 ? 'battle'
-      : this.player.x < 520 ? 'village' : 'field';
+      : this.player.x < 950 ? 'village' : 'field';
     return { zone };
   }
 

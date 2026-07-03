@@ -1,0 +1,33 @@
+// DEPARTURE — SIMPLE (16-cycle loop, the version the game plays).
+// Two sections: setting out, then the walking groove. Same Cm/Ab 4-cycle
+// heart as the village so crossfades stay consonant.
+
+setcpm(96/4)
+
+const MASTER = .85
+
+const lhDrive = note("<[c3 g3 eb3 g3]*4 [ab2 eb3 c3 eb3]*4>/2")
+  .sound("piano").gain("[.6 .42 .5 .42]*8")
+
+const rhHalf = note("<[eb4 d4 bb3 g3] [c4 bb3 ab3 eb3]>/2")
+  .sound("piano").room(.25).gain(.5)
+
+const rhRoad = note(`<
+  [[eb4 d4 bb3 g3]!2 [eb4 [d4 eb4] f4 g4] [bb4 g4 f4 d4]]
+  [[c4 bb3 ab3 eb3]!2 [c4 [bb3 c4] d4 eb4] [g4 eb4 d4 bb3]]
+>/2`).sound("piano").room(.12).gain("[.72 .5 .6 .52]*4")
+
+const stepLight = stack(
+  sound("framedrum:12 ~ ~ ~").gain(.7),
+  sound("shaker_small*4").gain("[.25 .15]*2"),
+)
+const stepRoad = stack(
+  sound("framedrum:12 ~ [~ framedrum:14] ~").gain(.7),
+  sound("~ snare_rim:3 ~ snare_rim:3").gain(.4),
+  sound("shaker_small*8").n("[0 2 4 1]*2").gain("[.25 .15]*4"),
+)
+
+arrange(
+  [8, stack(lhDrive, rhHalf, stepLight)],
+  [8, stack(lhDrive, rhRoad, stepRoad)],
+).postgain(MASTER)

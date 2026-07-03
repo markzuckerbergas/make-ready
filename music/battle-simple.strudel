@@ -1,0 +1,54 @@
+// BATTLE — SIMPLE (16-cycle loop, the version the game plays).
+// Two sections: the alarm (with the theme far away) and the clash.
+// In the game, battle ALWAYS enters at the alarm — it is the ramp.
+
+setcpm(96/4)
+
+const MASTER = .6
+
+const rhTheme = note(`<
+  [ab3 g3 eb3 c3]*4
+  [g3 f3 eb3 bb2]*4
+  [bb3 a3 g3 d3]*4
+  [c4 bb3 a3 f3]*4
+>/2`).sound("piano").room(.1).gain("[.78 .55 .66 .55]*4")
+
+const rhFar = note(`<
+  [ab3 g3 eb3 c3]*4
+  [g3 f3 eb3 bb2]*4
+  [bb3 a3 g3 d3]*4
+  [c4 bb3 a3 f3]*4
+>/2`).sound("piano").lpf(1300).room(.45).gain("[.38 .26 .32 .26]*4")
+
+const lhDrive = note(`<
+  [f2 c3 ab2 c3]*4
+  [eb2 bb2 g2 bb2]*4
+  [g2 d3 bb2 d3]*4
+  [f2 c3 a2 c3]*4
+>/2`).sound("piano").gain("[.6 .42 .5 .42]*8")
+
+const bassSaw = note("<f1 eb1 g1 f1>/2").struct("x*8")
+  .sound("sawtooth").lpf(650).gain(.38)
+
+const ostinato = note(`<
+  [f3 ab3 c4 ab3]*8
+  [eb3 g3 bb3 g3]*8
+  [g3 bb3 d4 bb3]*8
+  [f3 a3 c4 a3]*8
+>/2`).sound("sawtooth").lpf(1400).gain(.2)
+
+const taiko = sound(`<
+  [bassdrum1 [~ bassdrum1] bassdrum1 [bassdrum1 bassdrum1]]
+  [bassdrum1 [~ bassdrum1] ~ bassdrum1]
+>`).n("[6 5 7 5 6 7 5 6]").speed(rand.range(.94, 1.06)).gain("[1.3 1 .8 1.05]")
+
+const snareCall = sound(`<
+  [[snare_low*4] snare_low ~ [~ snare_low]]
+  [[snare_low*4] snare_low [snare_low*4] [snare_low snare_low]]
+>`).n("[18 19 17 19 16 19 18 19]").speed(rand.range(.97, 1.03))
+  .gain("[.95 1.35 1.05 1.25]")
+
+arrange(
+  [8, stack(bassSaw, ostinato, taiko, snareCall, rhFar)],
+  [8, stack(lhDrive, rhTheme, bassSaw, ostinato, taiko, snareCall)],
+).postgain(MASTER)

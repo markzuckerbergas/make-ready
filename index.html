@@ -33,10 +33,16 @@
                                white-space: nowrap; }
     #flavor { max-width: 820px; text-align: center; color: #8a8f98; font-size: .85rem;
               margin: .4rem 0 0; }
+    #vuRow { display: flex; align-items: center; gap: .5rem; font-size: .75rem;
+             color: #8a8f98; margin-top: .2rem; }
+    #vu { width: 180px; height: 8px; background: #2a2d33; border-radius: 4px; overflow: hidden; }
+    #vuFill { height: 100%; width: 0%;
+              background: linear-gradient(90deg, #3ecf6a 60%, #e8c33a 85%, #e05252); }
   </style>
 </head>
 <body>
   <div id="app"></div>
+  <div id="vuRow"><span>music</span><div id="vu"><div id="vuFill"></div></div></div>
 
   <section id="controls">
     <div>
