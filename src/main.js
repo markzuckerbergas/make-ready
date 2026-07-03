@@ -94,7 +94,7 @@ if (fbForm) {
       });
       const data = await res.json();
       if (data.success) {
-        status.textContent = 'dispatch received — thank you, soldier ✔';
+        status.textContent = 'received — thank you! ✔';
         fbForm.reset();
       } else {
         status.textContent = 'that misfired — try again in a moment';
