@@ -35,14 +35,20 @@
               margin: .4rem 0 0; }
     #vuRow { display: flex; align-items: center; gap: .5rem; font-size: .75rem;
              color: #8a8f98; margin-top: .2rem; }
-    #vu { width: 180px; height: 8px; background: #2a2d33; border-radius: 4px; overflow: hidden; }
+    #vu { width: 140px; height: 8px; background: #2a2d33; border-radius: 4px; overflow: hidden; }
+    #vuRow label { display: flex; align-items: center; gap: .3rem; }
+    #vuRow input[type=range] { width: 90px; accent-color: #3ecf6a; }
     #vuFill { height: 100%; width: 0%;
               background: linear-gradient(90deg, #3ecf6a 60%, #e8c33a 85%, #e05252); }
   </style>
 </head>
 <body>
   <div id="app"></div>
-  <div id="vuRow"><span>music</span><div id="vu"><div id="vuFill"></div></div></div>
+  <div id="vuRow">
+    <span>music</span><div id="vu"><div id="vuFill"></div></div>
+    <label>music vol <input id="musicVol" type="range" min="0" max="100" value="60" /></label>
+    <label>sfx vol <input id="sfxVol" type="range" min="0" max="100" value="80" /></label>
+  </div>
 
   <section id="controls">
     <div>

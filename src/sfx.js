@@ -5,6 +5,7 @@
 
 let ctx;
 const ac = () => (ctx ??= new (window.AudioContext || window.webkitAudioContext)());
+let volume = .8; // page slider
 
 function noiseBurst(dur, filterType, freq, gainVal, sweepTo) {
   const c = ac();
@@ -18,7 +19,7 @@ function noiseBurst(dur, filterType, freq, gainVal, sweepTo) {
   filter.frequency.setValueAtTime(freq, c.currentTime);
   if (sweepTo) filter.frequency.exponentialRampToValueAtTime(sweepTo, c.currentTime + dur);
   const g = c.createGain();
-  g.gain.setValueAtTime(gainVal, c.currentTime);
+  g.gain.setValueAtTime(gainVal * volume, c.currentTime);
   g.gain.exponentialRampToValueAtTime(.001, c.currentTime + dur);
   src.connect(filter).connect(g).connect(c.destination);
   src.start();
@@ -31,7 +32,7 @@ function click(freq, when = 0, gainVal = .12) {
   osc.type = 'square';
   osc.frequency.value = freq;
   const g = c.createGain();
-  g.gain.setValueAtTime(gainVal, t);
+  g.gain.setValueAtTime(gainVal * volume, t);
   g.gain.exponentialRampToValueAtTime(.001, t + .04);
   osc.connect(g).connect(c.destination);
   osc.start(t);
@@ -39,6 +40,8 @@ function click(freq, when = 0, gainVal = .12) {
 }
 
 export const sfx = {
+  setVolume(v) { volume = v; },
+
   // musket crack: noise burst + a low thump
   shot() {
     noiseBurst(.22, 'lowpass', 2800, .35, 400);
@@ -48,7 +51,7 @@ export const sfx = {
     osc.frequency.setValueAtTime(120, c.currentTime);
     osc.frequency.exponentialRampToValueAtTime(45, c.currentTime + .15);
     const g = c.createGain();
-    g.gain.setValueAtTime(.4, c.currentTime);
+    g.gain.setValueAtTime(.4 * volume, c.currentTime);
     g.gain.exponentialRampToValueAtTime(.001, c.currentTime + .18);
     osc.connect(g).connect(c.destination);
     osc.start();

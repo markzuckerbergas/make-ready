@@ -14,8 +14,9 @@ import { initStrudel } from '@strudel/web';
 //  * battle entries commit on a 1-cycle grid (combat can't wait 10 s)
 //  * crossfade faders are postgain signals: in ~2.5s, out ~4s, beat-locked
 //
-// Background tabs throttle the scheduler and cause glitches, so the director
-// pauses (hush + frozen playheads) when the tab hides and resumes on return.
+// Background tabs throttle the scheduler and can crackle — when the tab
+// hides we MUTE via the fader signals (never stop/restart the scheduler:
+// that desyncs the playhead clock from the pattern clock).
 // ---------------------------------------------------------------------------
 
 const CPS = .5;            // @strudel/web scheduler default (120 BPM @ 4/cycle)
@@ -32,8 +33,9 @@ class MusicDirector {
     this.off = { village: 0, field: null, battle: null };  // playhead offsets
     this.pos = { village: 0, field: 0, battle: 0 };        // parked playheads
     this.startedAt = null;
-    this.pausedAt = null;
     this.started = false;
+    this.userVol = .6;   // page slider; default keeps overall level modest
+    this.muted = false;  // tab hidden
     this.defeated = false;
     this._lvl = 0;
     this.ready = Promise.resolve(initStrudel({
@@ -65,6 +67,7 @@ class MusicDirector {
   }
 
   setDefeated(v) { this.defeated = v; }
+  setVolume(v) { this.userVol = v; }
 
   nowCycles() {
     return this.startedAt === null ? 0
@@ -72,16 +75,16 @@ class MusicDirector {
   }
 
   update(dt, snap) {
-    if (!this.started || this.startedAt === null || this.pausedAt !== null) return;
+    if (!this.started || this.startedAt === null) return;
     const want = this.defeated ? 'village' : snap.zone;
 
     if (want !== this.zone) {
       if (this.pending !== want) {
         this.pending = want;
         const now = this.nowCycles();
-        // battle can't wait for a phrase — commit on the next whole cycle;
+        // any transition involving battle is urgent — next whole cycle;
         // village<->field wait for the 4-cycle grid so harmony lines up
-        const grid = want === 'battle' ? 1 : 4;
+        const grid = (want === 'battle' || this.zone === 'battle') ? 1 : 4;
         this.commitAt = Math.ceil(now / grid) * grid;
       }
       if (this.nowCycles() >= this.commitAt - .02) this.commit(want);
@@ -90,9 +93,12 @@ class MusicDirector {
       this.commitAt = null;
     }
 
+    // battle enters and leaves faster than the calm songs swap
+    const IN = { village: .4, field: .4, battle: .55 };
+    const OUT = { village: .3, field: .3, battle: .5 };
     for (const k of ['village', 'field', 'battle']) {
       const target = k === this.zone ? 1 : 0;
-      const rate = target ? .4 : .25; // ~2.5s in, ~4s out
+      const rate = target ? IN[k] : OUT[k];
       const d = target - this.w[k];
       const step = rate * dt;
       this.w[k] = Math.abs(d) <= step ? target : this.w[k] + Math.sign(d) * step;
@@ -118,30 +124,23 @@ class MusicDirector {
   rebuild() {
     const { stack, signal } = globalThis;
     const w = this.w;
+    const vol = () => (this.muted ? 0 : this.userVol);
     stack(
       // per-song masters (1 / .85 / .6) folded into the faders
       buildVillage().late(this.off.village ?? 0)
-        .postgain(signal(() => w.village)),
+        .postgain(signal(() => w.village * vol())),
       buildField().late(this.off.field ?? 0)
-        .postgain(signal(() => w.field * .85)),
+        .postgain(signal(() => w.field * .85 * vol())),
       buildBattle().late(this.off.battle ?? 0)
-        .postgain(signal(() => w.battle * .6)),
+        .postgain(signal(() => w.battle * .6 * vol())),
     ).slow(SLOW).analyze(1).play();
   }
 
-  // Pause when the tab hides: background timer throttling starves the
-  // scheduler and crackles — silence beats glitches. Playheads freeze.
+  // Tab hidden -> mute through the faders. The scheduler keeps running so
+  // the playhead clock and the pattern clock never diverge.
   watchVisibility() {
     document.addEventListener('visibilitychange', () => {
-      if (!this.started) return;
-      if (document.hidden) {
-        this.pausedAt = performance.now();
-        globalThis.hush();
-      } else if (this.pausedAt !== null) {
-        this.startedAt += performance.now() - this.pausedAt;
-        this.pausedAt = null;
-        this.rebuild();
-      }
+      this.muted = document.hidden;
     });
   }
 
