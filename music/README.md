@@ -2,8 +2,9 @@
 
 The three composed songs of the soundtrack, as playable `.strudel` files
 (open them at <https://strudel.cc> or in the Strudel VS Code extension).
-These are the composition sources — the game plays JavaScript ports of them
-in [`src/music.js`](../src/music.js), which adds the zone-crossfade and
+These are the composition sources — the game plays JavaScript ports
+(village & field: the `-simple` versions; battle: the full composition) in
+[`src/music.js`](../src/music.js), which adds the zone-crossfade and
 per-song playhead logic.
 
 | Song | Zone | Length |

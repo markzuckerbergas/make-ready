@@ -1,8 +1,8 @@
 import { initStrudel } from '@strudel/web';
 
 // ---------------------------------------------------------------------------
-// MusicDirector v3 — plays the SIMPLE versions of the three songs
-// (../music/*-simple.strudel; the full compositions live alongside them).
+// MusicDirector v3 — village & field play their SIMPLE versions; battle
+// plays the FULL composition (see ../music/).
 //
 // Transition intelligence:
 //  * zone changes COMMIT only on the shared 4-cycle grid — and because every
@@ -14,15 +14,16 @@ import { initStrudel } from '@strudel/web';
 //  * battle entries commit on a 1-cycle grid (combat can't wait 10 s)
 //  * crossfade faders are postgain signals: in ~2.5s, out ~4s, beat-locked
 //
-// Background tabs throttle the scheduler and can crackle — when the tab
-// hides we MUTE via the fader signals (never stop/restart the scheduler:
-// that desyncs the playhead clock from the pattern clock).
+// Tab hidden -> the game pauses and so does the music: we SUSPEND the
+// AudioContext. Its currentTime freezes, which freezes Strudel's scheduler
+// with it — no background scheduling, no crackle. Our playhead clock is
+// shifted by the paused duration on resume, so everything stays in sync.
 // ---------------------------------------------------------------------------
 
 const CPS = .5;            // @strudel/web scheduler default (120 BPM @ 4/cycle)
 const SLOW = 1.25;         // slows the whole stack to 96 BPM
 const RATE = CPS / SLOW;   // song-cycles per second (one cycle = 2.5 s)
-const LEN = { village: 16, field: 16, battle: 16 };
+const LEN = { village: 16, field: 16, battle: 56 };
 
 class MusicDirector {
   constructor() {
@@ -35,7 +36,7 @@ class MusicDirector {
     this.startedAt = null;
     this.started = false;
     this.userVol = .6;   // page slider; default keeps overall level modest
-    this.muted = false;  // tab hidden
+    this.pausedAt = null; // tab hidden
     this.defeated = false;
     this._lvl = 0;
     this.ready = Promise.resolve(initStrudel({
@@ -75,7 +76,7 @@ class MusicDirector {
   }
 
   update(dt, snap) {
-    if (!this.started || this.startedAt === null) return;
+    if (!this.started || this.startedAt === null || this.pausedAt !== null) return;
     const want = this.defeated ? 'village' : snap.zone;
 
     if (want !== this.zone) {
@@ -124,7 +125,7 @@ class MusicDirector {
   rebuild() {
     const { stack, signal } = globalThis;
     const w = this.w;
-    const vol = () => (this.muted ? 0 : this.userVol);
+    const vol = () => this.userVol;
     stack(
       // per-song masters (1 / .85 / .6) folded into the faders
       buildVillage().late(this.off.village ?? 0)
@@ -136,11 +137,22 @@ class MusicDirector {
     ).slow(SLOW).analyze(1).play();
   }
 
-  // Tab hidden -> mute through the faders. The scheduler keeps running so
-  // the playhead clock and the pattern clock never diverge.
+  // Tab hidden -> suspend the whole audio engine (a true pause: the pattern
+  // clock freezes). Resume shifts our playhead clock by the paused duration.
   watchVisibility() {
     document.addEventListener('visibilitychange', () => {
-      this.muted = document.hidden;
+      if (!this.started) return;
+      const ctx = globalThis.getAudioContext?.();
+      if (document.hidden) {
+        if (this.pausedAt === null) {
+          this.pausedAt = performance.now();
+          ctx?.suspend();
+        }
+      } else if (this.pausedAt !== null) {
+        this.startedAt += performance.now() - this.pausedAt;
+        this.pausedAt = null;
+        ctx?.resume();
+      }
     });
   }
 
@@ -216,18 +228,20 @@ function buildField() {
 
 function buildBattle() {
   const { note, sound, stack, arrange, rand } = globalThis;
-  const rhTheme = note(`<
-    [ab3 g3 eb3 c3]*4
-    [g3 f3 eb3 bb2]*4
-    [bb3 a3 g3 d3]*4
-    [c4 bb3 a3 f3]*4
-  >/2`).sound('piano').room(.1).gain('[.78 .55 .66 .55]*4');
-  const rhFar = note(`<
-    [ab3 g3 eb3 c3]*4
-    [g3 f3 eb3 bb2]*4
-    [bb3 a3 g3 d3]*4
-    [c4 bb3 a3 f3]*4
-  >/2`).sound('piano').lpf(1300).room(.45).gain('[.38 .26 .32 .26]*4');
+
+  const theme = o => note(`<
+    [ab${o} g${o} eb${o} c${o}]*4
+    [g${o} f${o} eb${o} bb${o - 1}]*4
+    [bb${o} a${o} g${o} d${o}]*4
+    [c${o + 1} bb${o} a${o} f${o}]*4
+  >/2`);
+
+  const rhTheme = theme(3).sound('piano').room(.1).gain('[.78 .55 .66 .55]*4');
+  const rhFar = theme(3).sound('piano').lpf(1300).room(.45).gain('[.38 .26 .32 .26]*4');
+  const rhMid = theme(3).sound('piano').room(.15).gain('[.5 .35 .42 .35]*4');
+  const sparkMid = theme(4).sound('piano').room(.4).gain(.13);
+  const rhHigh = theme(4).sound('piano').room(.12).gain(.32);
+
   const lhDrive = note(`<
     [f2 c3 ab2 c3]*4
     [eb2 bb2 g2 bb2]*4
@@ -242,18 +256,59 @@ function buildBattle() {
     [g3 bb3 d4 bb3]*8
     [f3 a3 c4 a3]*8
   >/2`).sound('sawtooth').lpf(1400).gain(.2);
+
   const taiko = sound(`<
     [bassdrum1 [~ bassdrum1] bassdrum1 [bassdrum1 bassdrum1]]
     [bassdrum1 [~ bassdrum1] ~ bassdrum1]
   >`).n('[6 5 7 5 6 7 5 6]').speed(rand.range(.94, 1.06)).gain('[1.3 1 .8 1.05]');
-  const snareCall = sound(`<
+  const taikoFill = sound('<~ [~ ~ [~ framedrum:15] [framedrum:13 framedrum:16]]>')
+    .speed(rand.range(.95, 1.05)).gain(.9);
+
+  const snareVoice = p => sound(p)
+    .n('[18 19 17 19 16 19 18 19]').speed(rand.range(.97, 1.03));
+  const snareCallA = snareVoice(`<
     [[snare_low*4] snare_low ~ [~ snare_low]]
     [[snare_low*4] snare_low [snare_low*4] [snare_low snare_low]]
-  >`).n('[18 19 17 19 16 19 18 19]').speed(rand.range(.97, 1.03))
-    .gain('[.95 1.35 1.05 1.25]');
+  >`).gain('[.95 1.35 1.05 1.25]');
+  const snareCallB = snareVoice(`<
+    [[snare_low*4] snare_low [snare_low*4] snare_low]
+    [[snare_low*4] [snare_low snare_low] [snare_low*4] [snare_low snare_low snare_low]]
+  >`).gain('[1 1.3 1.05 1.25]');
+  const snareCallC = snareVoice(`<
+    [snare_low [snare_low*4] [~ snare_low] [snare_low*4]]
+    [[snare_low*4] [snare_low*4] snare_low [snare_low snare_low snare_low]]
+  >`).gain('[1.35 1.05 1.25 1.1]');
+
+  const drumsCore = stack(taiko, taikoFill, snareCallA);
+  const drumsClash = stack(taiko, taikoFill, snareCallB);
+  const drumsSurge = stack(
+    taiko, taikoFill, snareCallC,
+    sound('snare_low*16').n(13).gain('[.35 .22 .27 .22]*4'),
+    sound('[~ tambourine]*4').gain(.22),
+  );
+  const drumsEye = stack(
+    sound('bassdrum1 ~ bassdrum1 ~').n('[5 6]').speed(rand.range(.95, 1.05)).gain(.9),
+    snareVoice(`<
+      [[snare_low*4] snare_low ~ [~ snare_low]]
+      [[snare_low*4] snare_low [snare_low*4] [snare_low snare_low]]
+    >`).gain('[.6 .85 .65 .8]').room(.4),
+    sound('<~ timpani_roll:2 ~ timpani_roll:5>').gain(.3),
+    sound('<sus_cymbal ~ ~ ~>').gain(.16),
+  );
+
+  const lhEye = note('<[f2 c3 ab2 c3]*2 [db2 ab2 f2 ab2]*2>/2')
+    .sound('piano').room(.3).gain(.5);
+  const rhEye = note('<[ab3 ~ g3 ~] [f3 ~ ab3 ~]>/2')
+    .sound('piano').room(.35).gain(.42);
+
   return arrange(
-    [8, stack(bassSaw, ostinato, taiko, snareCall, rhFar)],
-    [8, stack(lhDrive, rhTheme, bassSaw, ostinato, taiko, snareCall)],
+    [8, stack(bassSaw, ostinato, drumsCore)],
+    [8, stack(bassSaw, ostinato, drumsCore, rhFar)],
+    [8, stack(bassSaw, ostinato, drumsClash, rhMid, sparkMid)],
+    [8, stack(lhDrive, rhTheme, ostinato, bassSaw, drumsSurge)],
+    [8, stack(lhEye, rhEye, drumsEye)],
+    [8, stack(lhDrive, rhTheme, rhHigh, ostinato, bassSaw, drumsSurge)],
+    [8, stack(bassSaw, ostinato, drumsCore, rhFar)],
   );
 }
 

@@ -322,9 +322,8 @@ export class BattleScene extends Phaser.Scene {
 
     const pack = 1 + Math.floor(Math.random() * (1 + danger * 2.5));
     for (let i = 0; i < Math.min(pack, maxEnemies - alive); i++) {
-      // spawn just off-screen, biased to the east (deeper = ambushes behind you)
-      const side = Math.random() < (.8 - danger * .25) ? 1 : -1;
-      const ex = clamp(this.player.x + side * (560 + Math.random() * 260),
+      // enemies always come from the east — no ambushes from behind
+      const ex = clamp(this.player.x + 560 + Math.random() * 260,
         SAFE_EDGE + 250, PLAY.right);
       this.enemies.push(new Enemy(this, ex,
         PLAY.top + Math.random() * (PLAY.bottom - PLAY.top),
