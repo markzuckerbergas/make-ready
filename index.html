@@ -30,6 +30,22 @@
     .overlay button { padding: .7rem 2.4rem; font-size: 1.2rem; border: 0;
                       border-radius: 8px; cursor: pointer; background: #3ecf6a;
                       color: #0e0f13; font-weight: 700; }
+    /* touch controls (shown only on touch devices) */
+    #touchUI { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+    #stick { position: absolute; left: 18px; bottom: 18px; width: 110px; height: 110px;
+             border-radius: 50%; background: rgba(255,255,255,.06);
+             border: 1px solid rgba(255,255,255,.15); pointer-events: auto;
+             touch-action: none; }
+    #stickKnob { position: absolute; left: 35px; top: 35px; width: 40px; height: 40px;
+                 border-radius: 50%; background: rgba(62,207,106,.45); }
+    #tButtons { position: absolute; right: 14px; bottom: 16px; display: flex;
+                flex-direction: column; gap: .5rem; pointer-events: auto; }
+    #tOrders { position: absolute; right: 14px; top: 44px; display: flex;
+               flex-direction: column; gap: .35rem; pointer-events: auto; }
+    #touchUI button { border: 1px solid rgba(255,255,255,.25); border-radius: 8px;
+                      background: rgba(14,15,19,.6); color: #e8e3d0; font-weight: 700;
+                      padding: .55rem .8rem; font-size: .8rem; touch-action: manipulation; }
+    #tButtons button { font-size: 1rem; padding: .8rem 1rem; }
     #footer { font-size: .8rem; color: #888; }
     #footer a { color: #aaa; }
     #pageCols { display: flex; gap: 2.5rem; flex-wrap: wrap; justify-content: center;
@@ -72,6 +88,22 @@
       <p>samples load on start — give it a moment on first visit</p>
       <button id="startBtn">▶ START</button>
     </div>
+    <div id="touchUI" hidden>
+      <div id="stick"><div id="stickKnob"></div></div>
+      <div id="tOrders">
+        <button data-act="ready">READY</button>
+        <button data-act="volley">VOLLEY</button>
+        <button data-act="behind">BEHIND</button>
+        <button data-act="will">AT WILL</button>
+        <button data-act="charge">CHARGE</button>
+        <button data-act="shop">BARRACKS</button>
+      </div>
+      <div id="tButtons">
+        <button data-act="reload">RELOAD</button>
+        <button data-act="sword">SWORD</button>
+        <button data-act="shoot">FIRE</button>
+      </div>
+    </div>
     <div id="pauseOverlay" class="overlay" hidden>
       <h2>PAUSED</h2>
       <p>the battle (and the band) wait for you</p>
@@ -96,6 +128,7 @@
         <tr><td>hold right-click</td><td>steady your aim — after a beat, your shot flies far truer</td></tr>
         <tr><td>R</td><td>reload — brings the rifle up first if the sword is out</td></tr>
         <tr><td>SPACE</td><td>sword swing toward your facing — draws the sword if it's stowed</td></tr>
+        <tr><td>B</td><td>the barracks (at the village) — spend banked treasure on upgrades</td></tr>
       </table>
     </div>
     <div>

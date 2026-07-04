@@ -4,6 +4,15 @@ import { Player, Ally, Enemy, Battalion, Giant } from './entities.js';
 import { sfx } from './sfx.js';
 import { music } from './music.js';
 
+// Village barracks upgrades — bought with BANKED treasure, kept forever
+const UPGRADES = [
+  { key: 'hands',  name: 'swift hands',   desc: 'your reload: 2.2s → 1.4s',        cost: 500 },
+  { key: 'coats',  name: 'sturdy coats',  desc: '+40 max health, squad-wide',       cost: 600 },
+  { key: 'locks',  name: 'oiled locks',   desc: 'ally reloads: 2.8s → 2.0s',       cost: 700 },
+  { key: 'barrel', name: 'rifled barrel', desc: 'tighter aim, truer steady',        cost: 800 },
+  { key: 'third',  name: 'a third rifle', desc: 'another ally joins your line',     cost: 1500 },
+];
+
 const RARITIES = [
   { min: 0,   name: 'common',    value: 50,   tint: 0xb8bcc4 },
   { min: .3,  name: 'rare',      value: 150,  tint: 0x6fb7ff },
@@ -29,9 +38,16 @@ export class BattleScene extends Phaser.Scene {
     this.bullets = [];
     this.placeLoot();
 
-    // banked treasure survives death/restart; carried is lost if you fall
-    this.banked = this.registry.get('banked') ?? 0;
+    // banked treasure + upgrades survive death, restart AND the browser
+    const sv = this.loadSave();
+    this.banked = sv.banked ?? 0;
+    this.upgrades = sv.upgrades ?? {};
+    this.victoryShown = sv.victoryShown ?? false;
+    this.applyUpgrades();
     this.carried = 0;
+    this.shopOpen = false;
+    this.shopUi = null;
+    this.campSpawned = false;
     this.spawnT = 2;
     this.clearedT = 0;   // spawn-suppression countdown after clearing an area
     this.clearedX = 0;   // where the area was cleared
@@ -51,14 +67,49 @@ export class BattleScene extends Phaser.Scene {
     this.buildHud();
   }
 
+  loadSave() {
+    try { return JSON.parse(localStorage.getItem('makeready.save')) ?? {}; }
+    catch { return {}; }
+  }
+
+  saveGame() {
+    localStorage.setItem('makeready.save', JSON.stringify({
+      banked: this.banked, upgrades: this.upgrades, victoryShown: this.victoryShown,
+    }));
+  }
+
+  // Each upgrade is applied exactly ONCE per scene, no matter how many
+  // times this runs (create + after every purchase).
+  applyUpgrades() {
+    this.appliedUps ??= {};
+    const fresh = k => this.upgrades[k] && !this.appliedUps[k] && (this.appliedUps[k] = true);
+    if (fresh('hands')) this.player.reloadTime = 1.4;
+    if (fresh('barrel')) this.player.spreadBase = 1.5; // steady tightens with it
+    if (fresh('coats')) {
+      for (const m of [this.player, ...this.allies]) { m.maxHp += 40; m.hp = m.maxHp; }
+    }
+    if (fresh('locks')) for (const a of this.allies) a.reloadTime = 2;
+    if (fresh('third') && this.allies.length < 3) {
+      const a = new Ally(this, 260, 440, 2);
+      if (this.upgrades.coats) { a.maxHp += 40; a.hp = a.maxHp; }
+      if (this.upgrades.locks) a.reloadTime = 2;
+      this.allies.push(a);
+    }
+  }
+
   setupInput() {
     this.keys = this.input.keyboard.addKeys(
-      'W,A,S,D,UP,LEFT,DOWN,RIGHT,SPACE,R,Q,E,X,TAB,ONE,TWO,THREE,FOUR,ENTER');
+      'W,A,S,D,UP,LEFT,DOWN,RIGHT,SPACE,R,Q,E,X,B,TAB,ONE,TWO,THREE,FOUR,FIVE,ENTER');
     this.input.keyboard.addCapture('SPACE,UP,DOWN,LEFT,RIGHT,TAB');
 
     this.input.mouse?.disableContextMenu();
     this.input.on('pointerdown', pointer => {
-      if (this.defeated || this.userPaused) return;
+      if (this.userPaused) return;
+      if (this.defeated) { // tap anywhere to rally — touch parity with ENTER
+        music.setDefeated(false);
+        this.scene.restart();
+        return;
+      }
       if (pointer.rightButtonDown()) { this.player.aiming = true; return; }
       const a = Math.atan2(pointer.worldY - (this.player.y - 12), pointer.worldX - this.player.x);
       this.player.attack(a);
@@ -72,14 +123,26 @@ export class BattleScene extends Phaser.Scene {
     cmd('R', () => { if (!this.defeated) this.player.reload(); });
     cmd('X', () => { if (!this.defeated) this.player.switchWeapon(); });
     cmd('TAB', () => { if (!this.defeated) this.player.switchWeapon(); });
-    cmd('ONE', () => this.command('behind', 'BEHIND ME!'));
-    cmd('TWO', () => this.command('free', 'FIRE AT WILL!'));
-    cmd('THREE', () => this.command('charge', 'CHAAARGE!'));
+    cmd('B', () => this.toggleShop());
+    cmd('ONE', () => this.shopOpen ? this.buyUpgrade(0) : this.command('behind', 'BEHIND ME!'));
+    cmd('TWO', () => this.shopOpen ? this.buyUpgrade(1) : this.command('free', 'FIRE AT WILL!'));
+    cmd('THREE', () => this.shopOpen ? this.buyUpgrade(2) : this.command('charge', 'CHAAARGE!'));
+    cmd('FOUR', () => { if (this.shopOpen) this.buyUpgrade(3); });
+    cmd('FIVE', () => { if (this.shopOpen) this.buyUpgrade(4); });
     cmd('Q', () => this.makeReady());
     cmd('E', () => this.volley());
     cmd('ENTER', () => {
       if (this.defeated && !this.userPaused) { music.setDefeated(false); this.scene.restart(); }
     });
+  }
+
+  // touch FIRE: aim at the nearest enemy, or where you're facing
+  touchShoot() {
+    const t = this.nearestEnemy(this.player, 950);
+    const a = t
+      ? Math.atan2((t.y - 13 * dscale(t.y)) - (this.player.y - 12), t.x - this.player.x)
+      : this.player.faceAngle();
+    this.player.attack(a);
   }
 
   // -------------------------------------------------------------------------
@@ -122,6 +185,7 @@ export class BattleScene extends Phaser.Scene {
       .sort((a, b) => dist(a, this.player) - dist(b, this.player));
     if (!targets.length) { this.toast('no targets in range'); return; }
     this.announce('FIRE!');
+    this.shake(90, .002);
     able.forEach((a, i) =>
       this.time.delayedCall(i * 90, () => a.volleyAt(this, targets[i % targets.length])));
   }
@@ -129,6 +193,8 @@ export class BattleScene extends Phaser.Scene {
   // -------------------------------------------------------------------------
   // Combat helpers (used by entities)
   // -------------------------------------------------------------------------
+  shake(ms, power) { this.cameras.main.shake(ms, power); }
+
   shoot(unit, angle, spreadDeg, dmg, hostile = false, life = .8) {
     const spread = (Math.random() - .5) * 2 * spreadDeg * (Math.PI / 180);
     const a = angle + spread;
@@ -142,6 +208,7 @@ export class BattleScene extends Phaser.Scene {
     });
     this.muzzleFx(mx, my);
     sfx.shot();
+    if (unit === this.player) this.shake(60, .0015);
   }
 
   muzzleFx(x, y) {
@@ -149,6 +216,10 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.add({ targets: flash, alpha: 0, scale: 2, duration: 90, onComplete: () => flash.destroy() });
     const smoke = this.add.circle(x, y - 4, 7, 0xcccccc, .5).setDepth(9000);
     this.tweens.add({ targets: smoke, alpha: 0, scale: 2.6, y: y - 22, duration: 700, onComplete: () => smoke.destroy() });
+    // the powder cloud that HANGS over a firefight
+    const cloud = this.add.circle(x + 6, y - 10, 9, 0xd8d3c8, .22).setDepth(8999);
+    this.tweens.add({ targets: cloud, alpha: 0, scale: 3.4, x: x + 30, y: y - 26,
+      duration: 2600, onComplete: () => cloud.destroy() });
   }
 
   melee(unit, angle, range, dmg) {
@@ -188,22 +259,23 @@ export class BattleScene extends Phaser.Scene {
       x: clamp(bx + sx, PLAY.left, PLAY.right),
       y: clamp(by + sy, PLAY.top, PLAY.bottom),
     });
-    const slots = mode === 'behind'
-      ? [mk(p.x - fx * 60, p.y - fy * 60, px * -35, py * -35),
-         mk(p.x - fx * 60, p.y - fy * 60, px * 35, py * 35)]
-      : [mk(p.x, p.y, px * -70, py * -70),
-         mk(p.x, p.y, px * 70, py * 70)];
-
-    if (alive.length === 1) {
-      const a = alive[0];
-      a.targetSlot = dist(a, slots[0]) <= dist(a, slots[1]) ? slots[0] : slots[1];
-      return;
+    // one slot per living ally, spread symmetrically around the player
+    const n = alive.length;
+    const slots = alive.map((_, i) => {
+      const side = i - (n - 1) / 2;
+      return mode === 'behind'
+        ? mk(p.x - fx * 60, p.y - fy * 60, px * side * 40, py * side * 40)
+        : mk(p.x, p.y, px * side * 70, py * side * 70);
+    });
+    // greedy nearest assignment — allies swap rather than cross paths
+    const pool = [...slots];
+    for (const a of alive) {
+      let best = 0;
+      for (let i = 1; i < pool.length; i++) {
+        if (dist(a, pool[i]) < dist(a, pool[best])) best = i;
+      }
+      a.targetSlot = pool.splice(best, 1)[0];
     }
-    const [a0, a1] = alive;
-    const straight = dist(a0, slots[0]) + dist(a1, slots[1]);
-    const swapped = dist(a0, slots[1]) + dist(a1, slots[0]);
-    if (swapped < straight) { a0.targetSlot = slots[1]; a1.targetSlot = slots[0]; }
-    else { a0.targetSlot = slots[0]; a1.targetSlot = slots[1]; }
   }
 
   nearestEnemy(unit, range) {
@@ -247,11 +319,12 @@ export class BattleScene extends Phaser.Scene {
     const dt = Math.min(deltaMs / 1000, .05);
 
     const k = this.keys;
+    const tm = window.__touchMove ?? { x: 0, y: 0 };
     this.player.update(dt, {
-      left: k.A.isDown || k.LEFT.isDown,
-      right: k.D.isDown || k.RIGHT.isDown,
-      up: k.W.isDown || k.UP.isDown,
-      down: k.S.isDown || k.DOWN.isDown,
+      left: k.A.isDown || k.LEFT.isDown || tm.x < -.3,
+      right: k.D.isDown || k.RIGHT.isDown || tm.x > .3,
+      up: k.W.isDown || k.UP.isDown || tm.y < -.3,
+      down: k.S.isDown || k.DOWN.isDown || tm.y > .3,
     });
     // a firing line only holds while you stand still — march and it breaks
     if (this.player.moving && this.allies.some(a => a.alive && a.mode === 'line')) {
@@ -267,6 +340,7 @@ export class BattleScene extends Phaser.Scene {
     this.separateUnits();
     this.updateGiant();
 
+    if (this.shopOpen && this.player.x >= 520) this.closeShop(); // walked out
     this.updateCamera(dt);
     this.updateSky();
     this.updateBullets(dt);
@@ -311,8 +385,9 @@ export class BattleScene extends Phaser.Scene {
           u.takeDamage(b.dmg);
           b.life = 0;
           b.hit = true;
-          const fx = this.add.circle(b.x, b.y, 5, 0xe05252, .85).setDepth(9000);
+          const fx = this.add.circle(b.x, b.y, b.rock ? 10 : 5, 0xe05252, .85).setDepth(9000);
           this.tweens.add({ targets: fx, alpha: 0, scale: 2.2, duration: 200, onComplete: () => fx.destroy() });
+          if (b.rock) this.shake(140, .004);
           break;
         }
       }
@@ -344,8 +419,10 @@ export class BattleScene extends Phaser.Scene {
 
     const danger = dangerAt(this.player.x);
     if (this.player.x < SAFE_EDGE + 100 || danger <= 0) return;
-    // the deep east belongs to the giant
+    // the deep east belongs to the giant, then to the war camp
     if (this.giant?.alive || (this.player.x > 4300 && !this.giantDefeated)) return;
+    if (this.campSpawned && this.player.x > 4300 &&
+        this.enemies.some(e => e.alive && e.x > 4600)) return;
 
     const alive = this.enemies.filter(e => e.alive).length;
     const maxEnemies = Math.floor(1 + danger * 9);
@@ -372,9 +449,10 @@ export class BattleScene extends Phaser.Scene {
         band[Math.floor(Math.random() * band.length)]));
     }
 
-    // drop enemies the player has long outrun (never the boss)
+    // drop enemies the player has long outrun (never the boss or camp troops)
     for (const e of this.enemies) {
-      if (e.alive && !e.isBoss && Math.abs(e.x - this.player.x) > 1700) {
+      if (e.alive && !e.isBoss && e.leashX === undefined
+          && Math.abs(e.x - this.player.x) > 1700) {
         e.alive = false;
         e.destroy();
       }
@@ -421,6 +499,33 @@ export class BattleScene extends Phaser.Scene {
       this.enemies.push(this.giant);
       this.announce('the ground shakes… THE GIANT WAKES!', '#e05252');
     }
+    // beyond the giant's grave: the war camp — the fight after the fight
+    if (this.giantDefeated && !this.campSpawned && this.player.x > 4450) {
+      this.campSpawned = true;
+      this.announce('drums beyond the ridge — a WAR CAMP stirs!', '#e05252');
+      for (const [tx, ty] of [[4820, 250], [4960, 320], [4880, 440], [5060, 240]]) {
+        const ds = dscale(clamp(ty, PLAY.top, PLAY.bottom));
+        this.add.image(tx, ty - 14 * ds, 'tent').setScale(ds * 1.4).setDepth(ty);
+        this.obstacles.push({ x: tx, y: ty, r: 20 * ds, blockH: 30 * ds });
+      }
+      const defs = [['marksman', 4790, 300], ['marksman', 5000, 400],
+        ['veteran', 4870, 360], ['veteran', 4950, 260]];
+      for (const [t, ex, ey] of defs) {
+        const e = new Enemy(this, ex, ey, t);
+        e.leashX = ex; e.leashY = ey; // camp troops hold their ground
+        this.enemies.push(e);
+      }
+      this.battalions.push(new Battalion(this, 4900, 380));
+      const lord = new Enemy(this, 5040, 340, 'warlord');
+      lord.isWarlord = true;
+      lord.leashX = 5040; lord.leashY = 340;
+      // the hoard is paid by a REAL kill only — never by despawns or culls
+      lord.onSlain = () => {
+        this.carried += 3000;
+        this.announce('THE WARLORD FALLS! +3000 treasure — carry it home!', '#ffd35a');
+      };
+      this.enemies.push(lord);
+    }
   }
 
   onGiantSlain() {
@@ -437,7 +542,7 @@ export class BattleScene extends Phaser.Scene {
     this.bullets.push({
       x: giant.x, y: giant.y - 20 * ds,
       vx: Math.cos(a) * 330, vy: Math.sin(a) * 330,
-      dmg: 24, life: 2.6, img, hostile: true,
+      dmg: 24, life: 2.6, img, hostile: true, rock: true,
     });
     sfx.sword(); // heave grunt stand-in
   }
@@ -504,12 +609,14 @@ export class BattleScene extends Phaser.Scene {
   // allies back to your side.
   // -------------------------------------------------------------------------
   updateVillage(dt) {
-    if (this.player.x >= 520 || !this.player.alive) { this.villageT = 0; return; }
+    if (this.player.x >= 520 || !this.player.alive) { this.villageT = 0; this.wasHome = false; return; }
+    if (!this.wasHome) { this.wasHome = true; this.toast('press B — the barracks'); }
     if (this.carried > 0) {
       this.banked += this.carried;
-      this.registry.set('banked', this.banked);
       this.announce(`treasure secured: +${this.carried}`, '#ffd35a');
       this.carried = 0;
+      this.saveGame();
+      if (this.giantDefeated && !this.victoryShown) this.showVictory();
     }
     for (const u of [this.player, ...this.allies]) {
       if (u.alive) u.hp = Math.min(u.maxHp, u.hp + 5 * dt);
@@ -527,9 +634,26 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  showVictory() {
+    this.victoryShown = true;
+    this.saveGame();
+    const veil = this.add.rectangle(480, 270, 960, 540, 0xffd35a, .12)
+      .setScrollFactor(0).setDepth(9550);
+    const t1 = this.add.text(480, 210, 'THE GIANT IS SLAIN — THE EAST IS YOURS', {
+      fontSize: 30, color: '#ffd35a', fontStyle: 'bold' })
+      .setOrigin(.5).setScrollFactor(0).setDepth(9551);
+    const t2 = this.add.text(480, 258,
+      `banked treasure: ${this.banked} — the frontier remains. keep marching.`,
+      { fontSize: 16, color: '#e8e3d0' })
+      .setOrigin(.5).setScrollFactor(0).setDepth(9551);
+    this.tweens.add({ targets: [veil, t1, t2], alpha: 0, delay: 6000, duration: 1500,
+      onComplete: () => { veil.destroy(); t1.destroy(); t2.destroy(); } });
+  }
+
   checkDefeat() {
     if (!this.player.alive && !this.defeated) {
       this.defeated = true;
+      this.closeShop();
       music.setDefeated(true);
       this.add.rectangle(480, 270, 960, 540, 0x000000, .55).setDepth(9998).setScrollFactor(0);
       this.add.text(480, 240, 'you fell', { fontSize: 42, color: '#e05252' })
@@ -538,7 +662,7 @@ export class BattleScene extends Phaser.Scene {
         `carried treasure lost: ${this.carried} — banked at home: ${this.banked}`,
         { fontSize: 18, color: '#ffd35a' })
         .setOrigin(.5).setDepth(9999).setScrollFactor(0);
-      this.add.text(480, 322, 'press ENTER to rally the line again', { fontSize: 16, color: '#ccc' })
+      this.add.text(480, 322, 'press ENTER or tap to rally the line again', { fontSize: 16, color: '#ccc' })
         .setOrigin(.5).setDepth(9999).setScrollFactor(0);
     }
   }
@@ -561,6 +685,58 @@ export class BattleScene extends Phaser.Scene {
       : near > 0 ? 'battle'
       : this.player.x < 950 ? 'village' : 'field';
     return { zone };
+  }
+
+  // -------------------------------------------------------------------------
+  // The barracks (village shop) — banked treasure buys permanent upgrades
+  // -------------------------------------------------------------------------
+  toggleShop() {
+    if (this.defeated || this.userPaused) return;
+    if (this.shopOpen) { this.closeShop(); return; }
+    if (this.player.x >= 520) { this.toast('the barracks is back at the village'); return; }
+    this.shopOpen = true;
+    const box = this.add.rectangle(480, 262, 660, 280, 0x0e0f13, .92)
+      .setScrollFactor(0).setDepth(9600).setStrokeStyle(1, 0x3ecf6a, .6);
+    const title = this.add.text(480, 152, `THE BARRACKS — banked: ${this.banked}t`,
+      { fontSize: 16, color: '#ffd35a', fontFamily: 'ui-monospace, monospace' })
+      .setOrigin(.5).setScrollFactor(0).setDepth(9601);
+    this.shopUi = [box, title];
+    // one tappable row per upgrade (works for touch AND mouse; 1-5 still buy)
+    UPGRADES.forEach((u, i) => {
+      const owned = this.upgrades[u.key];
+      const row = this.add.text(480, 190 + i * 32,
+        `${i + 1}  ${u.name.padEnd(14)} ${owned ? 'OWNED' : u.cost + 't'}  — ${u.desc}`,
+        { fontSize: 14, color: owned ? '#6f7680' : '#e8e3d0',
+          fontFamily: 'ui-monospace, monospace' })
+        .setOrigin(.5).setScrollFactor(0).setDepth(9601)
+        .setInteractive({ useHandCursor: true });
+      row.on('pointerdown', () => this.buyUpgrade(i));
+      this.shopUi.push(row);
+    });
+    const foot = this.add.text(480, 358, 'tap a row or press 1-5 to buy · B closes',
+      { fontSize: 12, color: '#8a8f98', fontFamily: 'ui-monospace, monospace' })
+      .setOrigin(.5).setScrollFactor(0).setDepth(9601);
+    this.shopUi.push(foot);
+  }
+
+  closeShop() {
+    this.shopOpen = false;
+    this.shopUi?.forEach(o => o.destroy());
+    this.shopUi = null;
+  }
+
+  buyUpgrade(i) {
+    const u = UPGRADES[i];
+    if (!u) return;
+    if (this.upgrades[u.key]) { this.toast('already owned'); return; }
+    if (this.banked < u.cost) { this.toast('not enough banked treasure'); return; }
+    this.banked -= u.cost;
+    this.upgrades[u.key] = true;
+    this.applyUpgrades();
+    this.saveGame();
+    this.announce(`${u.name.toUpperCase()} — bought!`, '#3ecf6a');
+    this.closeShop();
+    this.toggleShop(); // refresh the panel
   }
 
   // -------------------------------------------------------------------------
@@ -693,6 +869,8 @@ export class BattleScene extends Phaser.Scene {
     soldier('enemy_veteran_up', 0x2a2a30, 0xd9b45a, 'sword', 'up');
     soldier('enemy_battalion', 0xa8452f, 0xe8e3d0, 'rifle', 'side');
     soldier('enemy_battalion_up', 0xa8452f, 0xe8e3d0, 'rifle', 'up');
+    soldier('enemy_warlord', 0x421f2a, 0xffd35a, 'sword', 'side');
+    soldier('enemy_warlord_up', 0x421f2a, 0xffd35a, 'sword', 'up');
 
     let g = this.make.graphics({ add: false });
     g.fillStyle(0x000000); g.fillEllipse(10, 4, 20, 8);
@@ -722,6 +900,13 @@ export class BattleScene extends Phaser.Scene {
     g = this.make.graphics({ add: false });
     g.fillStyle(0xffffff); g.fillTriangle(6, 0, 0, 7, 6, 14); g.fillTriangle(6, 0, 12, 7, 6, 14);
     g.generateTexture('artifact', 12, 14); g.destroy();
+
+    // war-camp tent
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x5a4a38); g.fillTriangle(16, 0, 0, 26, 32, 26);
+    g.fillStyle(0x3d3226); g.fillTriangle(16, 4, 8, 26, 24, 26);
+    g.fillStyle(0x2a2118); g.fillRect(13, 14, 6, 12);
+    g.generateTexture('tent', 32, 28); g.destroy();
 
     // the giant: a hulking silhouette with a club
     g = this.make.graphics({ add: false });

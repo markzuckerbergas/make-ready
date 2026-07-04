@@ -41,6 +41,7 @@ function pauseGame() {
   if (paused || !window.__mrStarted) return;
   paused = true;
   window.__mrPaused = true;
+  window.__touchMove = { x: 0, y: 0 }; // never resume into a stuck stick
   music.pause();
   const sc = scene(); if (sc) sc.userPaused = true;
   pauseOverlay.hidden = false;
@@ -66,6 +67,57 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) pause
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && window.__mrStarted) (paused ? resumeGame() : pauseGame());
 });
+
+// ---- touch controls ------------------------------------------------------------
+// Virtual stick writes a vector the scene reads alongside the keyboard;
+// buttons call the same handlers the keys do. Shown only on touch devices.
+window.__touchMove = { x: 0, y: 0 };
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+  const ui = document.getElementById('touchUI');
+  if (ui) {
+    ui.hidden = false;
+    const stick = document.getElementById('stick');
+    const knob = document.getElementById('stickKnob');
+    const setStick = (dx, dy) => {
+      const len = Math.hypot(dx, dy);
+      const max = 45;
+      const cl = len > max ? max / len : 1;
+      knob.style.left = `${35 + dx * cl}px`;
+      knob.style.top = `${35 + dy * cl}px`;
+      window.__touchMove = len < 12 ? { x: 0, y: 0 }
+        : { x: (dx * cl) / max, y: (dy * cl) / max };
+    };
+    const onTouch = e => {
+      e.preventDefault();
+      const r = stick.getBoundingClientRect();
+      const t = e.touches[0];
+      setStick(t.clientX - (r.left + r.width / 2), t.clientY - (r.top + r.height / 2));
+    };
+    stick.addEventListener('touchstart', onTouch, { passive: false });
+    stick.addEventListener('touchmove', onTouch, { passive: false });
+    stick.addEventListener('touchend', e => { e.preventDefault(); setStick(0, 0); }, { passive: false });
+    stick.addEventListener('touchcancel', () => setStick(0, 0)); // notification shade etc.
+
+    const ACTS = {
+      shoot: sc => sc.touchShoot(),
+      sword: sc => sc.player.swing(),
+      reload: sc => sc.player.reload(),
+      ready: sc => sc.makeReady(),
+      volley: sc => sc.volley(),
+      behind: sc => sc.command('behind', 'BEHIND ME!'),
+      will: sc => sc.command('free', 'FIRE AT WILL!'),
+      charge: sc => sc.command('charge', 'CHAAARGE!'),
+      shop: sc => sc.toggleShop(),
+    };
+    ui.querySelectorAll('button[data-act]').forEach(btn => {
+      btn.addEventListener('touchstart', e => {
+        e.preventDefault();
+        const sc = scene();
+        if (sc && !sc.userPaused && !sc.defeated) ACTS[btn.dataset.act]?.(sc);
+      }, { passive: false });
+    });
+  }
+}
 
 // ---- feedback form (Web3Forms) -----------------------------------------------
 // Submitted with fetch so the player never leaves the game. While typing,

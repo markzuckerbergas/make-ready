@@ -101,6 +101,17 @@ stays musical. See [`src/music.js`](./src/music.js) — the whole system is
 ~170 lines. The technique comes from the simpler
 [adaptive-strudel](https://github.com/markzuckerbergas/adaptive-strudel) POC.
 
+### The barracks & the long game
+
+Banked treasure is saved in your browser and spent at the village
+**barracks** (press **B** at the homestead): faster reloads, sturdier
+coats, a truer barrel, a **third ally**. Slay the Giant, carry its
+trophy home, and the east is yours — but beyond the Giant's grave a
+**war camp** waits, and its warlord's hoard with it.
+
+On touch devices a virtual stick and order buttons appear — FIRE
+auto-aims the nearest enemy.
+
 ## Develop
 
 ```bash
@@ -109,8 +120,23 @@ npm run dev      # local dev server
 npm run build    # production build to dist/
 ```
 
+`npm test` boots the real game headlessly (Playwright), presses START and
+fails on any uncaught error; CI runs it as a gate before every deploy.
+
 Deploys to GitHub Pages automatically on push to `main` (see
 [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml)).
+
+### Mirror on itch.io
+
+```bash
+npm run zip:itch   # builds with relative paths -> make-ready-itch.zip
+```
+
+Then on itch.io: *Upload new project* → kind **HTML** → upload the zip →
+check *"This file will be played in the browser"* → viewport **990 × 640**
+(the canvas is 960×540) → save & publish. For later updates,
+[butler](https://itch.io/docs/butler/) pushes in one line:
+`butler push dist-itch YOURUSER/make-ready:html5`.
 
 ## License
 

@@ -29,8 +29,24 @@ jobs:
         with:
           path: dist
 
+  # boots the real game headlessly, presses START, fails on any
+  # uncaught error — the class of bug that only playing would catch
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+        env:
+          CI: 'true'
+
   deploy:
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -115,6 +115,7 @@ export class Player extends Unit {
     this.pendingReload = false;  // R pressed while the sword was out
     this.aiming = false;         // right mouse held
     this.steadyT = 0;            // how long the aim has been held steady
+    this.spreadBase = 2.5;       // degrees; the rifled-barrel upgrade tightens it
     this.pendingDir = null;  // candidate facing (octant key)
     this.pendingT = 0;       // how long it's been held
   }
@@ -189,7 +190,8 @@ export class Player extends Unit {
       if (!this.loaded) { this.scene.toast(this.reloadT > 0 ? 'reloading…' : 'click! — R to reload'); return; }
       this.loaded = false;
       // one shot, one kill — steadied aim (hold right-click) shoots far truer
-      this.scene.shoot(this, pointerAngle, this.steady() ? 1 : 2.5, 999, false, 1.8);
+      this.scene.shoot(this, pointerAngle,
+        this.steady() ? this.spreadBase * .4 : this.spreadBase, 999, false, 1.8);
       this.steadyT = 0;
     } else {
       this.swing();
@@ -331,6 +333,8 @@ export const ENEMY_TYPES = {
                                                              rifle: { range: 470, spread: 6,  dmg: 55, reload: 3 } },
   battalion:  { tex: 'enemy_battalion',  hp: 55, speed: 82,  melee: { dmg: 6,  cd: 1 },
                                                              rifle: { range: 520, spread: 6,  dmg: 50, reload: 3.2 } },
+  warlord:    { tex: 'enemy_warlord',    hp: 320, speed: 95, melee: { dmg: 18, cd: .6 },
+                                                             rifle: { range: 540, spread: 4,  dmg: 60, reload: 2.4 } },
 };
 
 export class Enemy extends Unit {
@@ -367,13 +371,19 @@ export class Enemy extends Unit {
     const reachable = t && t.x >= SAFE_EDGE;
 
     if (!reachable || this.x < SAFE_EDGE) {
-      // never enter the village: hold at the edge, get bored, leave
-      this.idleT += dt;
-      if (this.x < SAFE_EDGE + 40) this.moveToward(SAFE_EDGE + 80, this.y, dt, .8);
-      if (this.idleT > 6) {
-        this.alive = false;
-        this.scene.tweens.add({ targets: [this.sprite, this.shadow], alpha: 0, duration: 600 });
-        this.scene.time.delayedCall(700, () => this.destroy());
+      if (this.leashX !== undefined) {
+        // camp troops don't wander off or despawn — they return to their post
+        this.idleT = 0;
+        this.moveToward(this.leashX, this.leashY ?? this.y, dt, .7);
+      } else {
+        // never enter the village: hold at the edge, get bored, leave
+        this.idleT += dt;
+        if (this.x < SAFE_EDGE + 40) this.moveToward(SAFE_EDGE + 80, this.y, dt, .8);
+        if (this.idleT > 6) {
+          this.alive = false;
+          this.scene.tweens.add({ targets: [this.sprite, this.shadow], alpha: 0, duration: 600 });
+          this.scene.time.delayedCall(700, () => this.destroy());
+        }
       }
     } else {
       this.idleT = 0;
@@ -437,8 +447,10 @@ export class Enemy extends Unit {
 
   die() {
     super.die();
-    this.scene.tweens.add({ targets: [this.sprite, this.shadow], alpha: 0, delay: 900, duration: 500 });
-    this.scene.time.delayedCall(1500, () => this.destroy());
+    this.onSlain?.(); // a REAL kill — despawns and culls never fire this
+    // the fallen stay on the field a while — a battle should leave marks
+    this.scene.tweens.add({ targets: [this.sprite, this.shadow], alpha: 0, delay: 9000, duration: 3000 });
+    this.scene.time.delayedCall(12500, () => this.destroy());
   }
 }
 
