@@ -80,8 +80,9 @@ export class Unit {
     // ramrod bob: anyone working a reload pumps up and down a little
     const bob = (this.alive && this.loaded === false && this.reloadT > 0)
       ? Math.sin(this.scene.time.now / 55) * 1.4 * ds : 0;
+    const mul = this.scaleMul ?? 1;
     this.sprite.setPosition(this.x, this.y - 13 * ds + bob)
-      .setScale(ds * this.facing, ds)
+      .setScale(ds * this.facing * mul, ds * mul)
       .setDepth(this.y);
     this.shadow.setPosition(this.x, this.y).setScale(ds).setDepth(this.y - .1);
     if (this.flashT > 0) {
@@ -335,21 +336,39 @@ export const ENEMY_TYPES = {
                                                              rifle: { range: 520, spread: 6,  dmg: 50, reload: 3.2 } },
   warlord:    { tex: 'enemy_warlord',    hp: 320, speed: 95, melee: { dmg: 18, cd: .6 },
                                                              rifle: { range: 540, spread: 4,  dmg: 60, reload: 2.4 } },
+  guard:      { tex: 'enemy_veteran',    hp: 90, speed: 88,  melee: { dmg: 10, cd: .8 },
+                                                             rifle: { range: 540, spread: 5,  dmg: 60, reload: 2.6 } },
 };
 
 export class Enemy extends Unit {
-  constructor(scene, x, y, type = 'grunt') {
+  constructor(scene, x, y, type = 'grunt', tier = 1) {
     const spec = ENEMY_TYPES[type];
+    const eliteHp = tier === 2 ? 1.5 : 1;
     super(scene, x, y, spec.tex, {
-      hp: Math.round(spec.hp * (1 + dangerAt(x) * .4)), // deep-east ones are hardier
-      speed: spec.speed,
+      hp: Math.round(spec.hp * eliteHp * (1 + dangerAt(x) * .4)),
+      speed: spec.speed * (tier === 2 ? 1.08 : 1),
     });
     this.type = type;
+    this.tier = tier;
+    if (tier === 2) {
+      this.scaleMul = 1.15; // elites stand visibly taller
+      this.spec = {
+        ...spec,
+        melee: spec.melee && { ...spec.melee, dmg: Math.round(spec.melee.dmg * 1.3) },
+        rifle: spec.rifle && { ...spec.rifle, dmg: spec.rifle.dmg + 10 },
+      };
+      this.updateVisual(0);
+      return this.initCombat();
+    }
     this.spec = spec;
+    this.initCombat();
+  }
+
+  initCombat() {
     this.atkCd = 0;
-    this.loaded = !!spec.rifle;
+    this.loaded = !!this.spec.rifle;
     this.reloadT = 0;
-    this.reloadTime = spec.rifle?.reload ?? 0;
+    this.reloadTime = this.spec.rifle?.reload ?? 0;
     this.idleT = 0; // time spent with no reachable target
   }
 
@@ -368,7 +387,7 @@ export class Enemy extends Unit {
     }
     if (this.drilled) { this.updateDrilled(dt, scene); return; }
     const t = scene.nearestSquad(this);
-    const reachable = t && t.x >= SAFE_EDGE;
+    const reachable = t && !scene.inSanctuary(t.x);
 
     if (!reachable || this.x < SAFE_EDGE) {
       if (this.leashX !== undefined) {
@@ -460,7 +479,7 @@ export class Enemy extends Unit {
 // the orders. The volley spreads across the player AND the allies.
 // ---------------------------------------------------------------------------
 export class Battalion {
-  constructor(scene, x, y) {
+  constructor(scene, x, y, memberType = 'battalion', tier = 1) {
     this.scene = scene;
     this.anchor = { x, y };
     this.state = 'ready';
@@ -468,7 +487,7 @@ export class Battalion {
     this.dead = false;
     this.members = [];
     for (let i = 0; i < 4; i++) {
-      const m = new Enemy(scene, x + (i % 2) * 34, y + Math.floor(i / 2) * 30, 'battalion');
+      const m = new Enemy(scene, x + (i % 2) * 34, y + Math.floor(i / 2) * 30, memberType, tier);
       m.drilled = true;
       this.members.push(m);
       scene.enemies.push(m);
@@ -600,6 +619,58 @@ export class Giant extends Unit {
 
   die() {
     super.die();
-    this.scene.onGiantSlain?.(this);
+    if (this.isColossus) this.scene.onColossusSlain?.(this);
+    else this.scene.onGiantSlain?.(this);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The Colossus: the second boss, at the world's end. Bigger, harder, and it
+// hurls TWO boulders — one at its target, one at whoever else looks tasty.
+// ---------------------------------------------------------------------------
+export class Colossus extends Giant {
+  constructor(scene, x, y) {
+    super(scene, x, y);
+    this.isColossus = true; // die() routes to onColossusSlain via this flag
+    this.hp = this.maxHp = 1500;
+    this.speed = 38;
+    this.bodyR = 20;
+    this.scaleMul = 1.4;
+    this.rockCd = 1.5;
+  }
+
+  update(dt, scene) {
+    if (!this.alive) return;
+    this.atkCd = Math.max(0, this.atkCd - dt);
+    this.rockCd = Math.max(0, this.rockCd - dt);
+    const t = scene.nearestSquad(this);
+    if (t) {
+      const d = dist(this, t);
+      if (this.x < this.lairX - 900) {
+        this.moveToward(this.lairX, this.y, dt);
+      } else if (d < 80 * dscale(this.y)) {
+        if (this.atkCd <= 0) {
+          this.atkCd = 1.1;
+          t.takeDamage(32);
+          scene.slashFx(this.x, this.y - 18, Math.atan2(t.y - this.y, t.x - this.x), 0xffaa66);
+          scene.shake(160, .005);
+        }
+      } else {
+        if (d > 420) this.moveToward(t.x, t.y, dt);
+        if (this.rockCd <= 0 && d < 950) {
+          this.rockCd = 2.1;
+          scene.throwRock(this, t);
+          const squad = [scene.player, ...scene.allies].filter(u => u.alive && u !== t);
+          const other = squad[Math.floor(Math.random() * squad.length)];
+          if (other) {
+            scene.time.delayedCall(260, () => {
+              if (this.alive && other.alive) scene.throwRock(this, other);
+            });
+          }
+        }
+      }
+    }
+    this.clampToField();
+    this.updateVisual(dt);
   }
 }

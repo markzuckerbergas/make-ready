@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
-import { WORLD_W, PLAY, SAFE_EDGE, dangerAt, dscale, clamp, dist } from './world.js';
-import { Player, Ally, Enemy, Battalion, Giant } from './entities.js';
+import { WORLD_W, PLAY, SAFE_EDGE, OUTPOST, dangerAt, dangerAt2, dscale, clamp, dist } from './world.js';
+import { Player, Ally, Enemy, Battalion, Giant, Colossus } from './entities.js';
 import { sfx } from './sfx.js';
 import { music } from './music.js';
 
@@ -51,7 +51,6 @@ export class BattleScene extends Phaser.Scene {
     this.carried = 0;
     this.shopOpen = false;
     this.shopUi = null;
-    this.campSpawned = false;
     this.spawnT = 2;
     this.clearedT = 0;   // spawn-suppression countdown after clearing an area
     this.clearedX = 0;   // where the area was cleared
@@ -62,6 +61,10 @@ export class BattleScene extends Phaser.Scene {
     this.battalions = [];
     this.giant = null;
     this.giantDefeated = false;
+    this.outpostActive = false;
+    this.colossus = null;
+    this.colossusDefeated = false;
+    this.victory2Shown = sv.victory2Shown ?? false;
     // frozen until the START button; a restart inherits the global pause
     this.userPaused = !window.__mrStarted || !!window.__mrPaused;
 
@@ -69,6 +72,17 @@ export class BattleScene extends Phaser.Scene {
 
     this.setupInput();
     this.buildHud();
+  }
+
+  // safe ground: the village, and the forward camp once it stands
+  inSanctuary(x) {
+    return x < SAFE_EDGE ||
+      (this.outpostActive && x > OUTPOST.left && x < OUTPOST.right);
+  }
+
+  atRest() {
+    return this.player.x < 520 ||
+      (this.outpostActive && Math.abs(this.player.x - OUTPOST.center) < 220);
   }
 
   loadSave() {
@@ -80,6 +94,7 @@ export class BattleScene extends Phaser.Scene {
     localStorage.setItem('makeready.save', JSON.stringify({
       banked: this.banked, upgrades: this.upgrades,
       allyCount: this.allyCount, victoryShown: this.victoryShown,
+      victory2Shown: this.victory2Shown,
     }));
   }
 
@@ -351,7 +366,7 @@ export class BattleScene extends Phaser.Scene {
     this.separateUnits();
     this.updateGiant();
 
-    if (this.shopOpen && this.player.x >= 520) this.closeShop(); // walked out
+    if (this.shopOpen && !this.atRest()) this.closeShop(); // walked out
     this.updateCamera(dt);
     this.updateSky();
     this.updateBullets(dt);
@@ -428,36 +443,49 @@ export class BattleScene extends Phaser.Scene {
     // far from where you cleared) ends the respite
     if (this.clearedT > 0 && Math.abs(this.player.x - this.clearedX) < 450) return;
 
-    const danger = dangerAt(this.player.x);
-    if (this.player.x < SAFE_EDGE + 100 || danger <= 0) return;
-    // the deep east belongs to the giant, then to the war camp
+    if (this.player.x < SAFE_EDGE + 100 || this.atRest()) return;
+    // the deep east belongs to the bosses
     if (this.giant?.alive || (this.player.x > 4300 && !this.giantDefeated)) return;
-    if (this.campSpawned && this.player.x > 4300 &&
-        this.enemies.some(e => e.alive && e.x > 4600)) return;
+    if (this.colossus?.alive) return;
+
+    // tier 2 past the forward camp: elites, guard battalions, warlords
+    const tier2 = this.player.x > OUTPOST.right;
+    const danger = tier2 ? dangerAt2(this.player.x) : dangerAt(this.player.x);
+    if (danger <= 0 && !tier2) return;
 
     const alive = this.enemies.filter(e => e.alive).length;
-    const maxEnemies = Math.floor(1 + danger * 9);
+    const maxEnemies = tier2 ? Math.floor(4 + danger * 6) : Math.floor(1 + danger * 9);
     if (alive >= maxEnemies) return;
     if (Math.random() > .25 + danger * .4) return;
 
-    const band = this.enemyBand(danger);
-    const spawnX = () => clamp(this.player.x + 560 + Math.random() * 260,
-      SAFE_EDGE + 250, PLAY.right); // always from the east
+    const band = tier2 ? this.enemyBand2(danger) : this.enemyBand(danger);
+    const spawnX = () => {
+      let ex = clamp(this.player.x + 560 + Math.random() * 260,
+        SAFE_EDGE + 250, PLAY.right); // always from the east
+      // never inside the forward camp
+      if (this.outpostActive && ex > OUTPOST.left - 80 && ex < OUTPOST.right + 80) {
+        ex = OUTPOST.right + 120;
+      }
+      return ex;
+    };
     const spawnY = () => PLAY.top + Math.random() * (PLAY.bottom - PLAY.top);
 
-    if (band[0] === 'battalion') {
+    if (band[0] === 'battalion' || band[0] === 'battalion2') {
       // battalions arrive whole — one at a time, when there's room
       if (!this.battalions.some(b => !b.dead) && alive + 4 <= maxEnemies + 2) {
-        this.battalions.push(new Battalion(this, spawnX(), spawnY()));
+        this.battalions.push(band[0] === 'battalion2'
+          ? new Battalion(this, spawnX(), spawnY(), 'guard', 2)
+          : new Battalion(this, spawnX(), spawnY()));
         this.spawnT = 5;
       }
       return;
     }
 
+    const tier = tier2 ? 2 : 1;
     const pack = 1 + Math.floor(Math.random() * (1 + danger * 2.5));
     for (let i = 0; i < Math.min(pack, maxEnemies - alive); i++) {
       this.enemies.push(new Enemy(this, spawnX(), spawnY(),
-        band[Math.floor(Math.random() * band.length)]));
+        band[Math.floor(Math.random() * band.length)], tier));
     }
 
     // drop enemies the player has long outrun (never the boss or camp troops)
@@ -482,6 +510,14 @@ export class BattleScene extends Phaser.Scene {
     if (d < .75) return ['marksman'];
     if (d < .87) return ['marksman', 'runner'];
     return ['veteran'];
+  }
+
+  // tier-2 escalation past the forward camp
+  enemyBand2(d) {
+    if (d < .25) return ['veteran'];
+    if (d < .5)  return ['veteran', 'marksman'];
+    if (d < .75) return ['battalion2'];
+    return ['warlord', 'veteran'];
   }
 
   // No superimposing: push overlapping units apart (circle vs circle).
@@ -510,33 +546,40 @@ export class BattleScene extends Phaser.Scene {
       this.enemies.push(this.giant);
       this.announce('the ground shakes… THE GIANT WAKES!', '#e05252');
     }
-    // beyond the giant's grave: the war camp — the fight after the fight
-    if (this.giantDefeated && !this.campSpawned && this.player.x > 4450) {
-      this.campSpawned = true;
-      this.announce('drums beyond the ridge — a WAR CAMP stirs!', '#e05252');
-      for (const [tx, ty] of [[4820, 250], [4960, 320], [4880, 440], [5060, 240]]) {
-        const ds = dscale(clamp(ty, PLAY.top, PLAY.bottom));
-        this.add.image(tx, ty - 14 * ds, 'tent').setScale(ds * 1.4).setDepth(ty);
-        this.obstacles.push({ x: tx, y: ty, r: 20 * ds, blockH: 30 * ds });
-      }
-      const defs = [['marksman', 4790, 300], ['marksman', 5000, 400],
-        ['veteran', 4870, 360], ['veteran', 4950, 260]];
-      for (const [t, ex, ey] of defs) {
-        const e = new Enemy(this, ex, ey, t);
-        e.leashX = ex; e.leashY = ey; // camp troops hold their ground
-        this.enemies.push(e);
-      }
-      this.battalions.push(new Battalion(this, 4900, 380));
-      const lord = new Enemy(this, 5040, 340, 'warlord');
-      lord.isWarlord = true;
-      lord.leashX = 5040; lord.leashY = 340;
-      // the hoard is paid by a REAL kill only — never by despawns or culls
-      lord.onSlain = () => {
-        this.carried += 3000;
-        this.announce('THE WARLORD FALLS! +3000 treasure — carry it home!', '#ffd35a');
-      };
-      this.enemies.push(lord);
+    // the world's end: the Colossus
+    if (this.giantDefeated && !this.colossus && !this.colossusDefeated
+        && this.player.x > 8400) {
+      this.colossus = new Colossus(this, Math.min(this.player.x + 650, PLAY.right - 60), 360);
+      this.enemies.push(this.colossus);
+      this.announce('the earth SPLITS — the COLOSSUS rises!', '#e05252');
     }
+  }
+
+  // Raised the moment the Giant falls: a small safehold past his grave —
+  // a couple of tents, a cottage, a fire. Heal, rally, bank, shop.
+  buildOutpost() {
+    this.outpostActive = true;
+    this.announce('survivors raise a FORWARD CAMP beyond the grave!', '#9fdcb2');
+    const props = [
+      [5250, 280, 'house_small', 30, 16],
+      [5480, 300, 'tent', 16, 10],
+      [5330, 440, 'tent', 16, 10],
+      [5560, 430, 'haystack', 13, 5],
+    ];
+    for (const [x, y, key, r, lift] of props) {
+      const ds = dscale(clamp(y, PLAY.top, PLAY.bottom));
+      this.add.image(x, y - lift * ds, key).setScale(ds * 1.3).setDepth(y);
+      this.add.image(x, y, 'shadow').setScale(ds).setAlpha(.22).setDepth(y - .1);
+      if (r) this.obstacles.push({ x, y, r: r * ds, blockH: 40 * ds });
+    }
+    const fx = OUTPOST.center, fy = 400;
+    const fire = this.add.circle(fx, fy - 6, 6, 0xff9a3d).setDepth(fy);
+    this.add.circle(fx, fy, 9, 0x3a2a18).setDepth(fy - .2);
+    this.add.circle(fx, fy - 6, 30, 0xff9a3d, .08).setDepth(fy + .1);
+    this.tweens.add({ targets: fire, scale: { from: .8, to: 1.25 },
+      alpha: { from: .8, to: 1 }, yoyo: true, repeat: -1, duration: 260 });
+    this.add.text(OUTPOST.center, 190, 'FORWARD CAMP — safe ground',
+      { fontSize: 12, color: '#9fdcb2' }).setOrigin(.5).setDepth(200);
   }
 
   onGiantSlain() {
@@ -544,6 +587,14 @@ export class BattleScene extends Phaser.Scene {
     this.giant = null;
     this.carried += 2000;
     this.announce('THE GIANT FALLS! +2000 treasure — carry it home!', '#ffd35a');
+    this.buildOutpost();
+  }
+
+  onColossusSlain() {
+    this.colossusDefeated = true;
+    this.colossus = null;
+    this.carried += 8000;
+    this.announce('THE COLOSSUS FALLS! +8000 treasure — carry it home!', '#ffd35a');
   }
 
   throwRock(giant, target) {
@@ -564,11 +615,11 @@ export class BattleScene extends Phaser.Scene {
   // -------------------------------------------------------------------------
   placeLoot() {
     this.loot = [];
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 26; i++) {
       const x = 700 + Math.random() * (WORLD_W - 900);
       this.addLoot('supply', x);
     }
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < 30; i++) {
       // pow < 1 biases artifact placement eastward, where the danger is
       const x = 900 + Math.pow(Math.random(), .7) * (WORLD_W - 1100);
       this.addLoot('artifact', x);
@@ -620,7 +671,7 @@ export class BattleScene extends Phaser.Scene {
   // allies back to your side.
   // -------------------------------------------------------------------------
   updateVillage(dt) {
-    if (this.player.x >= 520 || !this.player.alive) { this.villageT = 0; this.wasHome = false; return; }
+    if (!this.atRest() || !this.player.alive) { this.villageT = 0; this.wasHome = false; return; }
     if (!this.wasHome) { this.wasHome = true; this.toast('press B — the barracks'); }
     if (this.carried > 0) {
       this.banked += this.carried;
@@ -628,6 +679,7 @@ export class BattleScene extends Phaser.Scene {
       this.carried = 0;
       this.saveGame();
       if (this.giantDefeated && !this.victoryShown) this.showVictory();
+      if (this.colossusDefeated && !this.victory2Shown) this.showVictory2();
     }
     for (const u of [this.player, ...this.allies]) {
       if (u.alive) u.hp = Math.min(u.maxHp, u.hp + 5 * dt);
@@ -661,6 +713,22 @@ export class BattleScene extends Phaser.Scene {
       onComplete: () => { veil.destroy(); t1.destroy(); t2.destroy(); } });
   }
 
+  showVictory2() {
+    this.victory2Shown = true;
+    this.saveGame();
+    const veil = this.add.rectangle(480, 270, 960, 540, 0xffd35a, .15)
+      .setScrollFactor(0).setDepth(9550);
+    const t1 = this.add.text(480, 210, 'THE COLOSSUS IS FELLED — THE FAR EAST IS CONQUERED', {
+      fontSize: 26, color: '#ffd35a', fontStyle: 'bold' })
+      .setOrigin(.5).setScrollFactor(0).setDepth(9551);
+    const t2 = this.add.text(480, 258,
+      `banked treasure: ${this.banked} — there is nothing left to fear. march anyway.`,
+      { fontSize: 16, color: '#e8e3d0' })
+      .setOrigin(.5).setScrollFactor(0).setDepth(9551);
+    this.tweens.add({ targets: [veil, t1, t2], alpha: 0, delay: 7000, duration: 1500,
+      onComplete: () => { veil.destroy(); t1.destroy(); t2.destroy(); } });
+  }
+
   checkDefeat() {
     if (!this.player.alive && !this.defeated) {
       this.defeated = true;
@@ -680,6 +748,8 @@ export class BattleScene extends Phaser.Scene {
 
   musicSnapshot() {
     const near = this.enemies.filter(e => e.alive && dist(e, this.player) < 950).length;
+    const bossNear = [this.giant, this.colossus].some(b =>
+      b?.alive && dist(b, this.player) < 1200);
     if (near > 0) {
       this.engaged = true;
       this.combatPeak = Math.max(this.combatPeak, near);
@@ -691,10 +761,10 @@ export class BattleScene extends Phaser.Scene {
       this.clearedX = this.player.x;
       this.toast('area clear — it should stay quiet for a bit');
     }
-    // which song should be playing: boss > battle > village > field.
-    const zone = (this.giant?.alive && dist(this.giant, this.player) < 1200) ? 'boss'
+    // which song should be playing: boss > battle > village/camp > field.
+    const zone = bossNear ? 'boss'
       : near > 0 ? 'battle'
-      : this.player.x < 950 ? 'village' : 'field';
+      : (this.player.x < 950 || this.atRest()) ? 'village' : 'field';
     return { zone };
   }
 
@@ -704,7 +774,7 @@ export class BattleScene extends Phaser.Scene {
   toggleShop() {
     if (this.defeated || this.userPaused) return;
     if (this.shopOpen) { this.closeShop(); return; }
-    if (this.player.x >= 520) { this.toast('the barracks is back at the village'); return; }
+    if (!this.atRest()) { this.toast('the barracks waits at the village or the forward camp'); return; }
     this.shopOpen = true;
     const box = this.add.rectangle(480, 262, 660, 280, 0x0e0f13, .92)
       .setScrollFactor(0).setDepth(9600).setStrokeStyle(1, 0x3ecf6a, .6);
@@ -807,7 +877,8 @@ export class BattleScene extends Phaser.Scene {
     const danger = dangerAt(p.x);
     const near = this.enemies.filter(e => e.alive).length;
     const zone = p.x < 520 ? 'village — safe'
-      : `danger ${(danger * 100).toFixed(0)}%`;
+      : this.atRest() ? 'forward camp — safe'
+      : `danger ${((this.player.x > OUTPOST.right ? dangerAt2(p.x) : danger) * 100).toFixed(0)}%${this.player.x > OUTPOST.right ? ' · TIER II' : ''}`;
     const status = near ? `enemies: ${near}`
       : this.clearedT > 0 && Math.abs(p.x - this.clearedX) < 450
         ? `area clear (${Math.ceil(this.clearedT)}s)`
@@ -1132,7 +1203,7 @@ export class BattleScene extends Phaser.Scene {
     // Trees and rocks are SOLID: units can't walk through them and their
     // body stops bullets — cover works for you and against you.
     this.obstacles ??= [];
-    for (let i = 0; i < 46; i++) {
+    for (let i = 0; i < 90; i++) {
       const x = 500 + Math.random() * (WORLD_W - 560);
       const y = PLAY.top + Math.random() * (PLAY.bottom - PLAY.top);
       const key = Math.random() < .6 ? 'tree' : 'rock';

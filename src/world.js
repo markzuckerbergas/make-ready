@@ -5,7 +5,13 @@
 // Far LEFT = the village (safe zone, no enemies).
 // The further RIGHT you go, the more danger — and the better the loot.
 
-export const WORLD_W = 5200;
+export const WORLD_W = 9200;
+
+// The forward camp — a small safehold raised after the Giant falls.
+export const OUTPOST = { left: 5150, right: 5650, center: 5400 };
+
+// tier-2 danger: 0 at the outpost gate, 1 approaching the world's end
+export const dangerAt2 = x => clamp((x - OUTPOST.right) / 2600, 0, 1);
 
 export const PLAY = {
   left: 40,
