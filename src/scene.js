@@ -10,7 +10,7 @@ const UPGRADES = [
   { key: 'coats',  name: 'sturdy coats',  desc: '+40 max health, squad-wide',       cost: 600 },
   { key: 'locks',  name: 'oiled locks',   desc: 'ally reloads: 2.8s → 2.0s',       cost: 700 },
   { key: 'barrel', name: 'rifled barrel', desc: 'tighter aim, truer steady',        cost: 800 },
-  { key: 'third',  name: 'a third rifle', desc: 'another ally joins your line',     cost: 1500 },
+  { key: 'recruit', name: 'recruit a rifle', desc: 'another soldier joins (repeatable)', cost: 1500, repeatable: true },
 ];
 
 const RARITIES = [
@@ -42,7 +42,11 @@ export class BattleScene extends Phaser.Scene {
     const sv = this.loadSave();
     this.banked = sv.banked ?? 0;
     this.upgrades = sv.upgrades ?? {};
+    this.allyCount = sv.allyCount ?? (this.upgrades.third ? 3 : 2);
     this.victoryShown = sv.victoryShown ?? false;
+    for (let i = 2; i < this.allyCount; i++) {
+      this.allies.push(new Ally(this, 200 + i * 55, 430, i));
+    }
     this.applyUpgrades();
     this.carried = 0;
     this.shopOpen = false;
@@ -74,7 +78,8 @@ export class BattleScene extends Phaser.Scene {
 
   saveGame() {
     localStorage.setItem('makeready.save', JSON.stringify({
-      banked: this.banked, upgrades: this.upgrades, victoryShown: this.victoryShown,
+      banked: this.banked, upgrades: this.upgrades,
+      allyCount: this.allyCount, victoryShown: this.victoryShown,
     }));
   }
 
@@ -89,12 +94,13 @@ export class BattleScene extends Phaser.Scene {
       for (const m of [this.player, ...this.allies]) { m.maxHp += 40; m.hp = m.maxHp; }
     }
     if (fresh('locks')) for (const a of this.allies) a.reloadTime = 2;
-    if (fresh('third') && this.allies.length < 3) {
-      const a = new Ally(this, 260, 440, 2);
-      if (this.upgrades.coats) { a.maxHp += 40; a.hp = a.maxHp; }
-      if (this.upgrades.locks) a.reloadTime = 2;
-      this.allies.push(a);
-    }
+  }
+
+  recruitAlly() {
+    const a = new Ally(this, this.player.x - 40, this.player.y + 30, this.allies.length);
+    if (this.upgrades.coats) { a.maxHp += 40; a.hp = a.maxHp; }
+    if (this.upgrades.locks) a.reloadTime = 2;
+    this.allies.push(a);
   }
 
   setupInput() {
@@ -259,13 +265,18 @@ export class BattleScene extends Phaser.Scene {
       x: clamp(bx + sx, PLAY.left, PLAY.right),
       y: clamp(by + sy, PLAY.top, PLAY.bottom),
     });
-    // one slot per living ally, spread symmetrically around the player
+    // one slot per living ally. In LINE the player IS the line's center:
+    // allies take alternating places -1, +1, -2, +2… (never 0 — nobody
+    // fights the player for his spot), packed at close order.
     const n = alive.length;
     const slots = alive.map((_, i) => {
-      const side = i - (n - 1) / 2;
-      return mode === 'behind'
-        ? mk(p.x - fx * 60, p.y - fy * 60, px * side * 40, py * side * 40)
-        : mk(p.x, p.y, px * side * 70, py * side * 70);
+      if (mode === 'behind') {
+        const side = i - (n - 1) / 2;
+        return mk(p.x - fx * 60, p.y - fy * 60, px * side * 40, py * side * 40);
+      }
+      const k = (i >> 1) + 1;
+      const side = i % 2 === 0 ? -k : k;
+      return mk(p.x, p.y, px * side * 48, py * side * 48);
     });
     // greedy nearest assignment — allies swap rather than cross paths
     const pool = [...slots];
@@ -703,9 +714,11 @@ export class BattleScene extends Phaser.Scene {
     this.shopUi = [box, title];
     // one tappable row per upgrade (works for touch AND mouse; 1-5 still buy)
     UPGRADES.forEach((u, i) => {
-      const owned = this.upgrades[u.key];
-      const row = this.add.text(480, 190 + i * 32,
-        `${i + 1}  ${u.name.padEnd(14)} ${owned ? 'OWNED' : u.cost + 't'}  — ${u.desc}`,
+      const owned = !u.repeatable && this.upgrades[u.key];
+      const label = u.repeatable
+        ? `${i + 1}  ${u.name.padEnd(14)} ${u.cost}t  — ${u.desc} · allies: ${this.allies.length}`
+        : `${i + 1}  ${u.name.padEnd(14)} ${owned ? 'OWNED' : u.cost + 't'}  — ${u.desc}`;
+      const row = this.add.text(480, 190 + i * 32, label,
         { fontSize: 14, color: owned ? '#6f7680' : '#e8e3d0',
           fontFamily: 'ui-monospace, monospace' })
         .setOrigin(.5).setScrollFactor(0).setDepth(9601)
@@ -728,13 +741,19 @@ export class BattleScene extends Phaser.Scene {
   buyUpgrade(i) {
     const u = UPGRADES[i];
     if (!u) return;
-    if (this.upgrades[u.key]) { this.toast('already owned'); return; }
+    if (!u.repeatable && this.upgrades[u.key]) { this.toast('already owned'); return; }
     if (this.banked < u.cost) { this.toast('not enough banked treasure'); return; }
     this.banked -= u.cost;
-    this.upgrades[u.key] = true;
-    this.applyUpgrades();
+    if (u.repeatable) {
+      this.allyCount++;
+      this.recruitAlly();
+      this.announce('A NEW RIFLE JOINS THE LINE!', '#3ecf6a');
+    } else {
+      this.upgrades[u.key] = true;
+      this.applyUpgrades();
+      this.announce(`${u.name.toUpperCase()} — bought!`, '#3ecf6a');
+    }
     this.saveGame();
-    this.announce(`${u.name.toUpperCase()} — bought!`, '#3ecf6a');
     this.closeShop();
     this.toggleShop(); // refresh the panel
   }

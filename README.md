@@ -105,7 +105,7 @@ stays musical. See [`src/music.js`](./src/music.js) — the whole system is
 
 Banked treasure is saved in your browser and spent at the village
 **barracks** (press **B** at the homestead): faster reloads, sturdier
-coats, a truer barrel, a **third ally**. Slay the Giant, carry its
+coats, a truer barrel — and **recruits, as many as you can afford**. Slay the Giant, carry its
 trophy home, and the east is yours — but beyond the Giant's grave a
 **war camp** waits, and its warlord's hoard with it.
 
