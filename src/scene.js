@@ -10,7 +10,8 @@ const UPGRADES = [
   { key: 'coats',  name: 'sturdy coats',  desc: '+40 max health, squad-wide',       cost: 600 },
   { key: 'locks',  name: 'oiled locks',   desc: 'ally reloads: 2.8s → 2.0s',       cost: 700 },
   { key: 'barrel', name: 'rifled barrel', desc: 'tighter aim, truer steady',        cost: 800 },
-  { key: 'recruit', name: 'recruit a rifle', desc: 'another soldier joins (repeatable)', cost: 1500, repeatable: true },
+  { key: 'recruit', name: 'recruit a rifle', desc: 'another soldier joins (max 10)', cost: 1500, repeatable: true },
+  { key: 'disband', name: 'disband recruits', desc: 'return to your two originals (no refund)', cost: 0, special: true },
 ];
 
 const RARITIES = [
@@ -42,7 +43,7 @@ export class BattleScene extends Phaser.Scene {
     const sv = this.loadSave();
     this.banked = sv.banked ?? 0;
     this.upgrades = sv.upgrades ?? {};
-    this.allyCount = sv.allyCount ?? (this.upgrades.third ? 3 : 2);
+    this.allyCount = Math.min(10, sv.allyCount ?? (this.upgrades.third ? 3 : 2));
     this.victoryShown = sv.victoryShown ?? false;
     for (let i = 2; i < this.allyCount; i++) {
       this.allies.push(new Ally(this, 200 + i * 55, 430, i));
@@ -120,7 +121,7 @@ export class BattleScene extends Phaser.Scene {
 
   setupInput() {
     this.keys = this.input.keyboard.addKeys(
-      'W,A,S,D,UP,LEFT,DOWN,RIGHT,SPACE,R,Q,E,X,B,TAB,ONE,TWO,THREE,FOUR,FIVE,ENTER');
+      'W,A,S,D,UP,LEFT,DOWN,RIGHT,SPACE,R,Q,E,X,B,TAB,ONE,TWO,THREE,FOUR,FIVE,SIX,ENTER');
     this.input.keyboard.addCapture('SPACE,UP,DOWN,LEFT,RIGHT,TAB');
 
     this.input.mouse?.disableContextMenu();
@@ -148,8 +149,9 @@ export class BattleScene extends Phaser.Scene {
     cmd('ONE', () => this.shopOpen ? this.buyUpgrade(0) : this.command('behind', 'BEHIND ME!'));
     cmd('TWO', () => this.shopOpen ? this.buyUpgrade(1) : this.command('free', 'FIRE AT WILL!'));
     cmd('THREE', () => this.shopOpen ? this.buyUpgrade(2) : this.command('charge', 'CHAAARGE!'));
-    cmd('FOUR', () => { if (this.shopOpen) this.buyUpgrade(3); });
+    cmd('FOUR', () => this.shopOpen ? this.buyUpgrade(3) : this.command('cover', 'COVER ME!'));
     cmd('FIVE', () => { if (this.shopOpen) this.buyUpgrade(4); });
+    cmd('SIX', () => { if (this.shopOpen) this.buyUpgrade(5); });
     cmd('Q', () => this.makeReady());
     cmd('E', () => this.volley());
     cmd('ENTER', () => {
@@ -264,41 +266,62 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.add({ targets: arc, alpha: 0, scale: 1.5, duration: 160, onComplete: () => arc.destroy() });
   }
 
-  // Formation slots relative to the player's facing: "line" extends
-  // perpendicular to it, "behind" is opposite to it. Slots are assigned to
-  // whichever ally is CLOSEST (minimal total travel), not by fixed index —
-  // so when the player spins around, allies swap slots instead of crossing
-  // each other's path diagonally.
+  // Formations relative to the player's facing:
+  //   line   — ranks of FIVE at close order, the player center-FRONT:
+  //            4 allies beside him, further ranks of 5 form up behind
+  //   behind — packed ranks of three at the player's back
+  //   cover  — packed ranks of three IN FRONT of the player (his shield)
+  // Slots are assigned greedily to the nearest ally — swap, don't cross.
   assignFormationSlots() {
-    const alive = this.allies.filter(a => a.alive && (a.mode === 'line' || a.mode === 'behind'));
+    const alive = this.allies.filter(a =>
+      a.alive && (a.mode === 'line' || a.mode === 'behind' || a.mode === 'cover'));
     if (!alive.length) return;
     const p = this.player;
     const fx = p.faceX, fy = p.faceY;
     const px = -fy, py = fx; // perpendicular to facing
     const mode = alive[0].mode;
-    const mk = (bx, by, sx, sy) => ({
-      x: clamp(bx + sx, PLAY.left, PLAY.right),
-      y: clamp(by + sy, PLAY.top, PLAY.bottom),
-    });
-    // one slot per living ally. In LINE the player IS the line's center:
-    // allies take alternating places -1, +1, -2, +2… (never 0 — nobody
-    // fights the player for his spot), packed at close order.
     const n = alive.length;
-    const slots = alive.map((_, i) => {
-      if (mode === 'behind') {
-        const side = i - (n - 1) / 2;
-        return mk(p.x - fx * 60, p.y - fy * 60, px * side * 40, py * side * 40);
-      }
-      const k = (i >> 1) + 1;
-      const side = i % 2 === 0 ? -k : k;
-      return mk(p.x, p.y, px * side * 48, py * side * 48);
+    const mk = (bx, by) => ({
+      x: clamp(bx, PLAY.left, PLAY.right),
+      y: clamp(by, PLAY.top, PLAY.bottom),
     });
-    // greedy nearest assignment — allies swap rather than cross paths
+
+    const slots = [];
+    if (mode === 'line') {
+      const COL = 38, ROW = 34;
+      const frontSides = [-1, 1, -2, 2]; // beside the player, tight
+      let i = 0;
+      for (; i < Math.min(n, 4); i++) {
+        slots.push(mk(p.x + px * frontSides[i] * COL, p.y + py * frontSides[i] * COL));
+      }
+      let row = 1;
+      while (i < n) {
+        const count = Math.min(n - i, 5);
+        const sides = [0, -1, 1, -2, 2].slice(0, count);
+        for (const sd of sides) {
+          slots.push(mk(
+            p.x - fx * ROW * row + px * sd * COL,
+            p.y - fy * ROW * row + py * sd * COL));
+          i++;
+        }
+        row++;
+      }
+    } else {
+      const dir = mode === 'cover' ? 1 : -1;
+      const COL = 30, ROW = 30, BASE = 52;
+      for (let i = 0; i < n; i++) {
+        const row = Math.floor(i / 3), side = (i % 3) - 1;
+        slots.push(mk(
+          p.x + dir * fx * (BASE + row * ROW) + px * side * COL,
+          p.y + dir * fy * (BASE + row * ROW) + py * side * COL));
+      }
+    }
+
     const pool = [...slots];
     for (const a of alive) {
       let best = 0;
-      for (let i = 1; i < pool.length; i++) {
-        if (dist(a, pool[i]) < dist(a, pool[best])) best = i;
+      for (let j = 1; j < pool.length; j++) {
+        if (dist(a, pool[j]) < dist(a, pool[best])) best = j;
       }
       a.targetSlot = pool.splice(best, 1)[0];
     }
@@ -776,7 +799,7 @@ export class BattleScene extends Phaser.Scene {
     if (this.shopOpen) { this.closeShop(); return; }
     if (!this.atRest()) { this.toast('the barracks waits at the village or the forward camp'); return; }
     this.shopOpen = true;
-    const box = this.add.rectangle(480, 262, 660, 280, 0x0e0f13, .92)
+    const box = this.add.rectangle(480, 262, 680, 300, 0x0e0f13, .92)
       .setScrollFactor(0).setDepth(9600).setStrokeStyle(1, 0x3ecf6a, .6);
     const title = this.add.text(480, 152, `THE BARRACKS — banked: ${this.banked}t`,
       { fontSize: 16, color: '#ffd35a', fontFamily: 'ui-monospace, monospace' })
@@ -785,10 +808,11 @@ export class BattleScene extends Phaser.Scene {
     // one tappable row per upgrade (works for touch AND mouse; 1-5 still buy)
     UPGRADES.forEach((u, i) => {
       const owned = !u.repeatable && this.upgrades[u.key];
+      const costTxt = u.cost ? u.cost + 't' : 'free';
       const label = u.repeatable
-        ? `${i + 1}  ${u.name.padEnd(14)} ${u.cost}t  — ${u.desc} · allies: ${this.allies.length}`
-        : `${i + 1}  ${u.name.padEnd(14)} ${owned ? 'OWNED' : u.cost + 't'}  — ${u.desc}`;
-      const row = this.add.text(480, 190 + i * 32, label,
+        ? `${i + 1}  ${u.name.padEnd(14)} ${costTxt}  — ${u.desc} · allies: ${this.allies.length}`
+        : `${i + 1}  ${u.name.padEnd(14)} ${owned ? 'OWNED' : costTxt}  — ${u.desc}`;
+      const row = this.add.text(480, 188 + i * 30, label,
         { fontSize: 14, color: owned ? '#6f7680' : '#e8e3d0',
           fontFamily: 'ui-monospace, monospace' })
         .setOrigin(.5).setScrollFactor(0).setDepth(9601)
@@ -796,7 +820,7 @@ export class BattleScene extends Phaser.Scene {
       row.on('pointerdown', () => this.buyUpgrade(i));
       this.shopUi.push(row);
     });
-    const foot = this.add.text(480, 358, 'tap a row or press 1-5 to buy · B closes',
+    const foot = this.add.text(480, 372, 'tap a row or press 1-6 to buy · B closes',
       { fontSize: 12, color: '#8a8f98', fontFamily: 'ui-monospace, monospace' })
       .setOrigin(.5).setScrollFactor(0).setDepth(9601);
     this.shopUi.push(foot);
@@ -811,7 +835,19 @@ export class BattleScene extends Phaser.Scene {
   buyUpgrade(i) {
     const u = UPGRADES[i];
     if (!u) return;
+    if (u.key === 'disband') {
+      if (this.allies.length <= 2) { this.toast('only your two originals remain'); return; }
+      for (const a of this.allies.slice(2)) a.destroy();
+      this.allies = this.allies.slice(0, 2);
+      this.allyCount = 2;
+      this.saveGame();
+      this.announce('RECRUITS DISBANDED', '#e8c33a');
+      this.closeShop();
+      this.toggleShop();
+      return;
+    }
     if (!u.repeatable && this.upgrades[u.key]) { this.toast('already owned'); return; }
+    if (u.repeatable && this.allies.length >= 10) { this.toast('the line is full — 10 men max'); return; }
     if (this.banked < u.cost) { this.toast('not enough banked treasure'); return; }
     this.banked -= u.cost;
     if (u.repeatable) {

@@ -107,6 +107,7 @@ if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
       behind: sc => sc.command('behind', 'BEHIND ME!'),
       will: sc => sc.command('free', 'FIRE AT WILL!'),
       charge: sc => sc.command('charge', 'CHAAARGE!'),
+      cover: sc => sc.command('cover', 'COVER ME!'),
       shop: sc => sc.toggleShop(),
     };
     ui.querySelectorAll('button[data-act]').forEach(btn => {

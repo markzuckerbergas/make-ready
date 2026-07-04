@@ -36,9 +36,14 @@ Commands to your two allies — formations are **relative to your facing**
 |---|---|---|
 | **Q** | MAKE READY | stand still to form the line; everyone reloads and braces |
 | **E** | FIRE! | volley — **a readied volley shoots far truer** |
-| **1** | BEHIND ME | (default) they cover from your back |
+| **1** | BEHIND ME | (default) packed ranks at your back |
 | **2** | FIRE AT WILL | hold position, keep shooting; wildest aim, self-reloading |
 | **3** | CHARGE | swords out, run the enemy down |
+| **4** | COVER ME | packed ranks in front of you — your living shield |
+
+Lines form in ranks of **five** with you at center-front; extra soldiers
+form further ranks behind. Recruit up to 10 at the barracks (disband
+any time).
 
 The drill is real: after a volley the muskets stay **empty** until you order
 MAKE READY. Q → E is the rhythm of the line.
